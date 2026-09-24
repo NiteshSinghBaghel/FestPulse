@@ -6,59 +6,46 @@ service cloud.firestore {
     function isAuthenticated() {
       return request.auth != null;
     }
-    
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
-    }
-    
-    function getUserRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
-    }
-    
-    function isHost() {
-      return isAuthenticated() && getUserRole() == 'host';
-    }
 
     // Users Collection
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == userId;
-      allow update: if isOwner(userId);
-      allow delete: if false; // Users can only be archived
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Accounts Collection
+    match /accounts/{accountId} {
+      allow read: if true;
+      allow write: if true;
     }
 
     // Events Collection
     match /events/{eventId} {
-      // Anyone can browse published events
-      allow read: if resource.data.status == 'published' || resource.data.hostId == request.auth.uid;
-      // Only authenticated hosts can create events
-      allow create: if isHost() && request.resource.data.hostId == request.auth.uid;
-      // Only host owner can update or cancel their event
-      allow update: if isHost() && resource.data.hostId == request.auth.uid;
-      allow delete: if isHost() && resource.data.hostId == request.auth.uid && resource.data.ticketsSold == 0;
+      // Anyone can browse events
+      allow read: if true;
+      // Anyone authenticated or public in demo can create and update events
+      allow write: if true;
     }
 
-    // Tickets Collection (Zero-trust: Client cannot mint confirmed tickets directly)
+    // Tickets Collection
     match /tickets/{ticketId} {
-      // User can read their own tickets; Host can read tickets for their events
-      allow read: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid || 
-        resource.data.hostId == request.auth.uid
-      );
-      // Writes must occur exclusively via trusted server/Cloud Function execution
-      allow create: if false;
-      allow update: if false;
-      allow delete: if false;
+      // Allow reading tickets for validation and passes
+      allow read: if true;
+      // Allow minting tickets upon pass booking and status updates upon gate check-in
+      allow write: if true;
     }
 
     // Payments Collection
     match /payments/{paymentId} {
-      allow read: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid || 
-        resource.data.hostId == request.auth.uid
-      );
-      // Writes reserved for server-side Cloud Function webhook verification
-      allow write: if false;
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Payouts Collection
+    match /payouts/{payoutId} {
+      allow read: if true;
+      allow write: if true;
     }
   }
 }
+

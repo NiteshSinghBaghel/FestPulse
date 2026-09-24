@@ -1,5 +1,6 @@
 import { CollegeEvent, Ticket, PaymentRecord } from '../types';
 import { StorageService } from './storageService';
+import { FirebaseDbService } from './firebaseDbService';
 
 export interface OrderCreationResult {
   orderId: string;
@@ -135,10 +136,8 @@ export class PaymentService {
       exitStatus: 'not_exited'
     };
 
-    // Save ticket
-    const allTickets = StorageService.getTickets();
-    allTickets.unshift(newTicket);
-    StorageService.saveTickets(allTickets);
+    // Save ticket (both local storage and cloud Firestore database)
+    StorageService.saveNewTicket(newTicket);
 
     const paymentRecord: PaymentRecord = {
       paymentId: req.paymentId,
@@ -146,7 +145,7 @@ export class PaymentService {
       ticketId,
       eventId: event.eventId,
       userId: req.userId,
-      amount: event.price,
+      amount: totalAmount,
       currency: 'INR',
       gateway: event.price === 0 ? 'FREE_PASS' : 'UPI_RAZORPAY',
       status: 'paid',
@@ -154,6 +153,9 @@ export class PaymentService {
       createdAt: new Date().toISOString(),
       verifiedAt: new Date().toISOString()
     };
+
+    // Record payment in Firestore cloud database
+    FirebaseDbService.savePayment(paymentRecord).catch(e => console.warn('Cloud savePayment error:', e));
 
     return {
       success: true,

@@ -49,6 +49,13 @@ export const App: React.FC = () => {
     }
   };
 
+  // Initial Firestore Cloud Database synchronization on mount
+  useEffect(() => {
+    StorageService.syncFromFirestore().then(() => {
+      refreshData();
+    });
+  }, []);
+
   useEffect(() => {
     refreshData();
   }, [currentUser, role]);

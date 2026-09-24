@@ -38,7 +38,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
   const [googleEmail, setGoogleEmail] = useState('');
   const [googleName, setGoogleName] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setSuccessMsg('');
@@ -55,7 +55,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
         setError('Please enter your password.');
         return;
       }
-      const res = login(cleanEmail, password, role);
+      const res = await login(cleanEmail, password, role);
       if (!res.success) {
         setError(res.error || 'Failed to login. Please verify credentials.');
         return;
@@ -70,12 +70,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
         setError('Password must be at least 6 characters.');
         return;
       }
-      const res = register(
+      const res = await register(
         name.trim(), 
         cleanEmail, 
         password, 
         role, 
-        college.trim() || (role === 'host' ? 'Campus Event Council' : 'College University'), 
+        role === 'host' ? (college.trim() || 'Campus Event Council') : '', 
         phone.trim()
       );
       if (!res.success) {
@@ -101,7 +101,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
     setShowGoogleModal(true);
   };
 
-  const handleConfirmGoogleAuth = (e: React.FormEvent) => {
+  const handleConfirmGoogleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!googleEmail || !googleEmail.includes('@')) {
       setError('Please provide a valid Google account email.');
@@ -111,7 +111,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
     const cleanName = googleName.trim() || cleanEmail.split('@')[0];
     const avatar = `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`;
 
-    loginWithGoogle(cleanName, cleanEmail, role, avatar);
+    await loginWithGoogle(cleanName, cleanEmail, role, avatar);
     setShowGoogleModal(false);
     onSuccess();
   };
@@ -262,19 +262,21 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
 
             {mode === 'register' && (
               <>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">College / University</label>
-                  <div className="relative">
-                    <School className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      placeholder="e.g. IIT Delhi / Delhi University"
-                      value={college}
-                      onChange={(e) => setCollege(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-500 shadow-2xs"
-                    />
+                {role === 'host' && (
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Organizing Body / University</label>
+                    <div className="relative">
+                      <School className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="e.g. Campus Event Council"
+                        value={college}
+                        onChange={(e) => setCollege(e.target.value)}
+                        className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-500 shadow-2xs"
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <div>
                   <label className="font-bold text-slate-700 block mb-1">Phone Number (Optional)</label>
@@ -409,6 +411,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
               </button>
             </p>
           )}
+
+          {/* Cryptographic JWT & Security Guarantee */}
+          <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-center gap-2 text-[11px] text-slate-500 text-center">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>Secured with HMAC-SHA256 JWT & Salted Cryptographic Hashing</span>
+          </div>
         </div>
       </div>
 

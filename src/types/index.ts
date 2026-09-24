@@ -9,6 +9,7 @@ export interface UserProfile {
   phone?: string;
   college?: string;
   authProvider?: 'email' | 'google';
+  token?: string; // Signed HMAC-SHA256 JWT bearer token
   createdAt: string;
   updatedAt: string;
 }
@@ -18,6 +19,8 @@ export interface RegisteredAccount {
   name: string;
   email: string;
   password?: string;
+  passwordHash?: string; // Cryptographic SHA-256 salted hash
+  salt?: string; // Cryptographic salt
   role: UserRole;
   phone?: string;
   college?: string;
