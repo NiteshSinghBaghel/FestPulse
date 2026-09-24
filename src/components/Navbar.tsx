@@ -123,19 +123,19 @@ export const Navbar: React.FC<NavbarProps> = ({
 
               <button
                 onClick={() => onNavigate && onNavigate('host-attendees')}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                className={`px-2.5 lg:px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                   activeTab === 'host-attendees'
                     ? 'bg-white text-amber-800 shadow-xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
                 }`}
               >
                 <Users className="w-4 h-4 text-teal-600" />
-                <span>Attendees Ledger</span>
+                <span>Attendees<span className="hidden xl:inline"> Ledger</span></span>
               </button>
 
               <button
                 onClick={() => onNavigate && onNavigate('host-analytics')}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                className={`px-2.5 lg:px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                   activeTab === 'host-analytics'
                     ? 'bg-white text-amber-800 shadow-xs'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
@@ -149,7 +149,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </nav>
 
         {/* Right: Actions, Host Tools, Search & Profile */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
           {/* Host Quick Actions in Navbar on Desktop */}
           {role === 'host' && (
             <div className="flex items-center gap-2">

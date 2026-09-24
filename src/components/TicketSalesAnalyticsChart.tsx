@@ -360,11 +360,11 @@ export const TicketSalesAnalyticsChart: React.FC<TicketSalesAnalyticsChartProps>
       </div>
 
       {/* Metric Selector Tabs */}
-      <div className="flex items-center justify-between gap-2 pt-1">
-        <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             onClick={() => setMetricView('tickets')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
               metricView === 'tickets'
                 ? 'bg-indigo-600 text-white shadow-xs'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -375,7 +375,7 @@ export const TicketSalesAnalyticsChart: React.FC<TicketSalesAnalyticsChartProps>
           </button>
           <button
             onClick={() => setMetricView('revenue')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
               metricView === 'revenue'
                 ? 'bg-emerald-600 text-white shadow-xs'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -386,7 +386,7 @@ export const TicketSalesAnalyticsChart: React.FC<TicketSalesAnalyticsChartProps>
           </button>
           <button
             onClick={() => setMetricView('both')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
               metricView === 'both'
                 ? 'bg-slate-900 text-white shadow-xs'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'

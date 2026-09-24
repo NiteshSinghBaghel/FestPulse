@@ -510,7 +510,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
               </div>
 
               {/* Action Buttons */}
-              <div className="flex items-center gap-1.5 w-full sm:w-auto justify-end border-t sm:border-t-0 border-slate-100 pt-3 sm:pt-0">
+              <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto justify-start sm:justify-end border-t sm:border-t-0 border-slate-100 pt-2.5 sm:pt-0">
                 {/* USER MANDATE: Only the host who created the event can edit it */}
                 {((evt.hostId === currentUser?.uid) || (evt.hostId === 'host-council-101' && currentUser?.uid === 'host-council-101')) ? (
                   <button

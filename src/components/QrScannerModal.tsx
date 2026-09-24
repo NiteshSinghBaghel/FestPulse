@@ -302,52 +302,52 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
       
       {/* ================= TOP FULL-PAGE HEADER (LIGHT THEME) ================= */}
       <header className="px-4 py-3 sm:px-6 sm:py-3.5 bg-white border-b border-slate-200 flex items-center justify-between shrink-0 shadow-xs">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <button
             onClick={() => {
               stopCamera();
               onClose();
             }}
-            className="py-1.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition active:scale-95 border border-slate-200 shadow-2xs"
-            aria-label="Back to dashboard"
+            className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition active:scale-95 border border-slate-200 shadow-2xs shrink-0"
+            aria-label="Exit scanner"
+            title="Exit scanner"
           >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Exit Scanner</span>
+            <ArrowLeft className="w-5 h-5 text-slate-700" />
           </button>
 
-          <div>
-            <h1 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
-              <span>Gate Entry Scanner</span>
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-700 border border-emerald-200">
+          <div className="min-w-0">
+            <h1 className="text-sm sm:text-lg font-black text-slate-900 flex items-center gap-1.5 sm:gap-2 truncate">
+              <span className="truncate">Gate Entry Scanner</span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-700 border border-emerald-200 shrink-0">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
                 Live
               </span>
             </h1>
-            <p className="text-[11px] text-slate-500 hidden sm:block">
+            <p className="text-[11px] text-slate-500 hidden md:block truncate">
               High-speed automatic camera gate check-in with 2-second turnaround
             </p>
           </div>
         </div>
 
         {/* Actions & Status */}
-        <div className="flex items-center gap-2">
-          {/* Dedicated Manual Ticket Verify Button requested by user */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Dedicated Manual Ticket Verify Button */}
           <button
             type="button"
             onClick={() => {
               setIsManualModalOpen(true);
             }}
-            className="py-1.5 px-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-black flex items-center gap-1.5 shadow-2xs transition active:scale-95"
+            className="py-1.5 px-2.5 sm:px-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-xs font-black flex items-center gap-1.5 shadow-2xs transition active:scale-95"
             title="Manual Ticket Verification: Click to enter ticket ID"
           >
-            <FileCheck className="w-3.5 h-3.5 text-amber-700" />
-            <span className="hidden sm:inline">Manual Ticket Verify</span>
-            <span className="sm:hidden">Manual Verify</span>
+            <FileCheck className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+            <span className="hidden sm:inline">Manual Verify</span>
+            <span className="sm:hidden text-[11px]">Verify</span>
           </button>
 
-          <div className="px-3.5 py-1.5 rounded-2xl bg-slate-50 border border-slate-200 text-right shadow-2xs">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-bold">Total Entered</span>
-            <span className="text-sm font-black text-emerald-600">{recentEntries.length} Attendees</span>
+          <div className="px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-xl sm:rounded-2xl bg-slate-50 border border-slate-200 text-right shadow-2xs">
+            <span className="text-[9px] sm:text-[10px] text-slate-500 uppercase tracking-wider block font-bold">Total</span>
+            <span className="text-xs sm:text-sm font-black text-emerald-600 whitespace-nowrap">{recentEntries.length} In</span>
           </div>
         </div>
       </header>
@@ -533,7 +533,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
             </div>
           </div>
 
-          <div className="flex gap-2 items-center flex-1 sm:max-w-md">
+          <div className="flex gap-2 items-center flex-1 w-full sm:max-w-md">
             <input
               type="text"
               placeholder="Enter Ticket ID (e.g. TKT-...) or QR token..."
@@ -542,23 +542,15 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
               onKeyDown={(e) => {
                 if (e.key === 'Enter') processToken(manualTokenInput);
               }}
-              className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-500 focus:bg-white transition shadow-2xs"
+              className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-500 focus:bg-white transition shadow-2xs"
             />
             <button
               type="button"
               onClick={() => processToken(manualTokenInput)}
               disabled={isProcessing || !manualTokenInput.trim()}
-              className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs disabled:opacity-50 transition shadow-xs whitespace-nowrap active:scale-95"
+              className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs disabled:opacity-50 transition shadow-xs whitespace-nowrap active:scale-95 shrink-0"
             >
               Verify Pass
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsManualModalOpen(true)}
-              className="py-2.5 px-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 font-bold text-xs transition shadow-2xs whitespace-nowrap active:scale-95"
-              title="Open dedicated systematic verification window"
-            >
-              Systematic
             </button>
           </div>
         </div>
