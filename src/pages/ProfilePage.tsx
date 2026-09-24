@@ -6,7 +6,6 @@ import {
   Phone, 
   School, 
   ShieldCheck, 
-  LogOut, 
   RotateCcw, 
   Save, 
   Sparkles,
@@ -17,7 +16,7 @@ import {
 interface ProfilePageProps {}
 
 export const ProfilePage: React.FC<ProfilePageProps> = () => {
-  const { currentUser, role, logout, updateProfile } = useAuth();
+  const { currentUser, role, updateProfile } = useAuth();
 
   const [name, setName] = useState(currentUser?.name || '');
   const [college, setCollege] = useState(currentUser?.college || 'Imperial Institute of Technology');
@@ -66,15 +65,6 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
             }`}>
               {role === 'host' ? '⚡ Organizer / Host' : '🎓 Student Pass Holder'}
             </span>
-
-            <div className="w-full mt-6 pt-5 border-t border-slate-100">
-              <button
-                onClick={logout}
-                className="w-full py-2.5 px-4 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold text-xs flex items-center justify-center gap-2 transition"
-              >
-                <LogOut className="w-4 h-4" /> Log Out
-              </button>
-            </div>
           </div>
 
           {/* Locked Session Role Card */}

@@ -1,9 +1,8 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { 
   ShieldCheck, 
   UserCheck, 
-  Search, 
   Home, 
   Ticket as TicketIcon, 
   User, 
@@ -12,7 +11,8 @@ import {
   Users, 
   BarChart3, 
   QrCode,
-  Plus
+  LogOut,
+  ChevronDown
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -33,7 +33,25 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenCreateEvent,
   ticketCount = 0
 }) => {
-  const { currentUser, role } = useAuth();
+  const { currentUser, role, logout } = useAuth();
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close profile dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setIsProfileMenuOpen(false);
+      }
+    };
+
+    if (isProfileMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isProfileMenuOpen]);
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/90 shadow-2xs">
@@ -150,52 +168,23 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right: Actions, Host Tools, Search & Profile */}
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-          {/* Host Quick Actions in Navbar on Desktop */}
-          {role === 'host' && (
+          {/* Host Quick Actions in Navbar */}
+          {role === 'host' && onOpenScanner && (
             <div className="flex items-center gap-2">
-              {onOpenCreateEvent && (
-                <button
-                  type="button"
-                  onClick={onOpenCreateEvent}
-                  className="p-2.5 sm:px-3 sm:py-2 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition active:scale-95"
-                  title="Add New Event"
-                >
-                  <Plus className="w-4 h-4 stroke-[2.5]" />
-                  <span className="hidden sm:inline">Add Event</span>
-                </button>
-              )}
-
-              {onOpenScanner && (
-                <button
-                  type="button"
-                  onClick={onOpenScanner}
-                  className="relative p-2.5 sm:px-3 sm:py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 text-slate-950 font-black text-xs flex items-center gap-2 shadow-xs transition active:scale-95 group overflow-hidden"
-                  title="Scan passes with Gate QR Scanner"
-                >
-                  {/* Subtle animated scan sweep line */}
-                  <span className="absolute inset-x-0 h-0.5 bg-white/70 shadow-[0_0_8px_white] animate-[pulse_1.5s_cubic-bezier(0.4,0,0.6,1)_infinite] top-1"></span>
-                  <div className="relative">
-                    <QrCode className="w-4 h-4 animate-bounce group-hover:scale-110 transition duration-300" />
-                  </div>
-                  <span className="hidden sm:inline font-black tracking-tight">Gate Scan</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={onOpenScanner}
+                className="relative p-2.5 sm:px-3 sm:py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 text-slate-950 font-black text-xs flex items-center gap-2 shadow-xs transition active:scale-95 group overflow-hidden"
+                title="Scan passes with Gate QR Scanner"
+              >
+                {/* Subtle animated scan sweep line */}
+                <span className="absolute inset-x-0 h-0.5 bg-white/70 shadow-[0_0_8px_white] animate-[pulse_1.5s_cubic-bezier(0.4,0,0.6,1)_infinite] top-1"></span>
+                <div className="relative">
+                  <QrCode className="w-4 h-4 animate-bounce group-hover:scale-110 transition duration-300" />
+                </div>
+                <span className="hidden sm:inline font-black tracking-tight">Gate Scan</span>
+              </button>
             </div>
-          )}
-
-          {/* Search Trigger */}
-          {role === 'user' && onOpenSearch && (
-            <button
-              onClick={onOpenSearch}
-              className="py-1.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 text-xs font-medium flex items-center gap-2 transition"
-              aria-label="Search events"
-            >
-              <Search className="w-3.5 h-3.5 text-slate-500" />
-              <span className="hidden sm:inline">Search events...</span>
-              <kbd className="hidden lg:inline-block px-1.5 py-0.5 rounded bg-white text-[10px] font-mono text-slate-400 border border-slate-200">
-                /
-              </kbd>
-            </button>
           )}
 
           {/* Role Indicator Badge */}
@@ -220,29 +209,105 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
           </div>
 
-          {/* Profile Button */}
-          <button
-            onClick={() => onNavigate && onNavigate('profile')}
-            className={`flex items-center gap-2 p-1 pl-1.5 rounded-full border transition ${
-              activeTab === 'profile'
-                ? 'bg-indigo-50 border-indigo-400'
-                : 'bg-white hover:bg-slate-50 border-slate-200'
-            }`}
-            title={currentUser?.name}
-          >
-            <span className="hidden lg:inline text-xs font-bold text-slate-700 max-w-[100px] truncate">
-              {currentUser?.name?.split(' ')[0]}
-            </span>
-            <div className="w-8 h-8 rounded-full ring-2 ring-indigo-500/30 overflow-hidden shrink-0">
-              {currentUser?.photoURL ? (
-                <img src={currentUser.photoURL} alt={currentUser.name} className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full bg-indigo-100 flex items-center justify-center text-xs font-black text-indigo-700">
-                  {currentUser?.name?.charAt(0) || 'U'}
+          {/* Profile Dropdown Container */}
+          <div className="relative" ref={profileMenuRef}>
+            <button
+              onClick={() => setIsProfileMenuOpen(prev => !prev)}
+              className={`flex items-center gap-2 p-1 pl-1.5 rounded-full border transition cursor-pointer select-none ${
+                activeTab === 'profile' || isProfileMenuOpen
+                  ? 'bg-indigo-50 border-indigo-400 ring-2 ring-indigo-500/20'
+                  : 'bg-white hover:bg-slate-50 border-slate-200'
+              }`}
+              title={currentUser?.name}
+              aria-label="User profile and menu"
+              aria-expanded={isProfileMenuOpen}
+            >
+              <span className="hidden lg:inline text-xs font-bold text-slate-700 max-w-[100px] truncate">
+                {currentUser?.name?.split(' ')[0]}
+              </span>
+              <div className="w-8 h-8 rounded-full ring-2 ring-indigo-500/30 overflow-hidden shrink-0">
+                {currentUser?.photoURL ? (
+                  <img src={currentUser.photoURL} alt={currentUser.name} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full bg-indigo-100 flex items-center justify-center text-xs font-black text-indigo-700">
+                    {currentUser?.name?.charAt(0) || 'U'}
+                  </div>
+                )}
+              </div>
+              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 mr-0.5 ${
+                isProfileMenuOpen ? 'rotate-180 text-indigo-600' : ''
+              }`} />
+            </button>
+
+            {/* Profile Menu Dropdown Card */}
+            {isProfileMenuOpen && (
+              <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-white border border-slate-200 shadow-xl py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                {/* User info mini header */}
+                <div className="px-4 py-3 border-b border-slate-100">
+                  <p className="text-xs font-black text-slate-900 truncate">
+                    {currentUser?.name}
+                  </p>
+                  <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                    {currentUser?.email}
+                  </p>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <span className={`text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full ${
+                      role === 'host'
+                        ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                        : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                    }`}>
+                      {role === 'host' ? '⚡ Organizer / Host' : '🎓 Student Pass Holder'}
+                    </span>
+                  </div>
                 </div>
-              )}
-            </div>
-          </button>
+
+                {/* Dropdown Options */}
+                <div className="p-1.5 space-y-1">
+                  {/* Option 1: My Profile */}
+                  <button
+                    onClick={() => {
+                      setIsProfileMenuOpen(false);
+                      if (onNavigate) {
+                        onNavigate('profile');
+                      }
+                    }}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition text-left cursor-pointer ${
+                      activeTab === 'profile'
+                        ? 'bg-indigo-50 text-indigo-700'
+                        : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
+                      <User className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="leading-tight">My Profile</div>
+                      <div className="text-[10px] font-normal text-slate-400">View & edit account details</div>
+                    </div>
+                  </button>
+
+                  <div className="h-px bg-slate-100 my-1"></div>
+
+                  {/* Option 2: Logout */}
+                  <button
+                    onClick={() => {
+                      setIsProfileMenuOpen(false);
+                      logout();
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 hover:text-rose-700 transition text-left cursor-pointer"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                      <LogOut className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="leading-tight">Log Out</div>
+                      <div className="text-[10px] font-normal text-rose-400">End your current session</div>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
         </div>
       </div>
