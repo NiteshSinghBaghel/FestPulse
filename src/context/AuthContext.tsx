@@ -2,6 +2,8 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { UserProfile, UserRole, RegisteredAccount } from '../types';
 import { StorageService } from '../services/storageService';
 import { JwtService } from '../services/jwtService';
+import { FirebaseDbService } from '../services/firebaseDbService';
+import { signInWithGooglePopup as fbSignInWithGoogle, firebaseLogout } from '../services/firebase';
 
 interface AuthContextType {
   currentUser: UserProfile | null;
@@ -10,7 +12,20 @@ interface AuthContextType {
   isTokenVerified: boolean;
   login: (email: string, password: string, role: UserRole) => Promise<{ success: boolean; error?: string }>;
   register: (name: string, email: string, password: string, role: UserRole, college?: string, phone?: string) => Promise<{ success: boolean; error?: string }>;
-  loginWithGoogle: (name: string, email: string, role: UserRole, photoURL?: string) => Promise<{ success: boolean; error?: string }>;
+  loginWithGoogle: (
+    name: string, 
+    email: string, 
+    role: UserRole, 
+    photoURL?: string,
+    providedUid?: string,
+    college?: string,
+    phone?: string
+  ) => Promise<{ success: boolean; isNewUser?: boolean; error?: string }>;
+  signInWithGooglePopup: (
+    selectedRole: UserRole,
+    college?: string,
+    phone?: string
+  ) => Promise<{ success: boolean; isNewUser?: boolean; error?: string }>;
   logout: () => void;
   updateProfile: (data: Partial<UserProfile>) => Promise<{ success: boolean; error?: string }>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
@@ -242,34 +257,54 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
-  // Google Sign-In with Cryptographic JWT Issuance
+  // Google Sign-In & Registration with Real Firebase & Cryptographic JWT Issuance
   const loginWithGoogle = async (
     name: string, 
     email: string, 
     selectedRole: UserRole, 
-    photoURL?: string
-  ): Promise<{ success: boolean; error?: string }> => {
+    photoURL?: string,
+    providedUid?: string,
+    college?: string,
+    phone?: string
+  ): Promise<{ success: boolean; isNewUser?: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = name.trim();
 
     let account = StorageService.findAccountByEmail(cleanEmail);
+    const isNewUser = !account;
 
     if (!account) {
-      const uid = selectedRole === 'host' ? `host-g-${Date.now().toString(36)}` : `usr-g-${Date.now().toString(36)}`;
+      const uid = providedUid || (selectedRole === 'host' ? `host-g-${Date.now().toString(36)}` : `usr-g-${Date.now().toString(36)}`);
       account = {
         uid,
-        name: cleanName || (selectedRole === 'host' ? 'Event Organizer' : 'Campus Student'),
+        name: cleanName || (selectedRole === 'host' ? 'Campus Event Host' : 'Campus Student'),
         email: cleanEmail,
         role: selectedRole,
-        college: selectedRole === 'host' ? 'University Organizing Body' : 'Campus University',
+        college: college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
+        phone: phone?.trim() || '',
         photoURL: photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
         authProvider: 'google',
         createdAt: new Date().toISOString(),
       };
       StorageService.saveAccount(account);
+      // Persist to Cloud Firestore accounts collection
+      FirebaseDbService.saveAccount(account).catch(err => {
+        console.warn('Firestore user account cloud backup notice:', err);
+      });
     } else {
-      account.role = selectedRole;
+      account = {
+        ...account,
+        role: selectedRole,
+        name: cleanName || account.name,
+        photoURL: photoURL || account.photoURL,
+        college: college?.trim() || account.college,
+        phone: phone?.trim() || account.phone,
+        authProvider: 'google',
+      };
       StorageService.saveAccount(account);
+      FirebaseDbService.saveAccount(account).catch(err => {
+        console.warn('Firestore user account cloud update notice:', err);
+      });
     }
 
     // Issue Signed HMAC-SHA256 JWT Token
@@ -289,7 +324,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       name: account.name,
       email: account.email,
       role: selectedRole,
-      college: account.college || 'Campus University',
+      college: account.college || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
       phone: account.phone || '',
       photoURL: account.photoURL || photoURL,
       authProvider: 'google',
@@ -299,10 +334,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     setCurrentUser(userProfile);
-    return { success: true };
+    return { success: true, isNewUser };
+  };
+
+  // Real Google Sign-in Popup via Firebase Authentication
+  const signInWithGooglePopup = async (
+    selectedRole: UserRole,
+    college?: string,
+    phone?: string
+  ): Promise<{ success: boolean; isNewUser?: boolean; error?: string }> => {
+    try {
+      const result = await fbSignInWithGoogle();
+      const gUser = result.user;
+      if (!gUser.email) {
+        return { success: false, error: 'Google account did not return a valid email address.' };
+      }
+      return await loginWithGoogle(
+        gUser.displayName || gUser.email.split('@')[0],
+        gUser.email,
+        selectedRole,
+        gUser.photoURL || undefined,
+        gUser.uid,
+        college,
+        phone
+      );
+    } catch (err: any) {
+      console.warn('Firebase signInWithGooglePopup error:', err);
+      if (err?.code === 'auth/popup-closed-by-user') {
+        return { success: false, error: 'Google sign-in popup was closed before completing.' };
+      }
+      if (err?.code === 'auth/popup-blocked') {
+        return { success: false, error: 'Popup blocked by browser. Please allow popups or use Google One-Tap.' };
+      }
+      if (err?.code === 'auth/unauthorized-domain') {
+        return { 
+          success: false, 
+          error: `unauthorized-domain: ${window.location.hostname} is not yet added in Firebase Authorized Domains.` 
+        };
+      }
+      return { success: false, error: err?.message || 'Google authentication failed' };
+    }
   };
 
   const logout = () => {
+    firebaseLogout().catch(e => console.warn('Firebase logout notice:', e));
     JwtService.clearToken();
     setJwtToken(null);
     setIsTokenVerified(false);
@@ -484,6 +559,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isTokenVerified,
         login,
         loginWithGoogle,
+        signInWithGooglePopup,
         register,
         logout,
         updateProfile,
