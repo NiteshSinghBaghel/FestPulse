@@ -127,7 +127,10 @@ export interface PayoutRecord {
   accountHolderName: string;
   bankName?: string;
   ifscCode?: string;
-  status: 'completed' | 'processing' | 'pending';
-  referenceId: string;
+  status: 'completed' | 'processing' | 'pending' | 'failed';
+  referenceId: string; // Bank UTR or IMPS reference
+  gatewayRef?: string; // Razorpay Payout ID (pout_...)
+  gateway?: 'RAZORPAY_PAYOUT' | 'IMPS_DIRECT' | 'UPI_INSTANT';
   timestamp: string;
+  notes?: string;
 }

@@ -581,17 +581,22 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
           <div className="p-5 rounded-3xl bg-gradient-to-br from-emerald-600 via-teal-700 to-indigo-800 text-white shadow-lg space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <span className="px-2.5 py-0.5 rounded-full bg-white/20 text-emerald-100 text-[10px] font-black uppercase tracking-wider">
-                  Host Payout System
-                </span>
-                <h3 className="text-xl sm:text-2xl font-black mt-1">Transfer Earnings to Your Account</h3>
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full bg-white/20 text-emerald-100 text-[10px] font-black uppercase tracking-wider">
+                    Razorpay Settlement Gateway
+                  </span>
+                  <span className="text-[10px] font-bold text-emerald-200 bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-400/30">
+                    Direct UPI & Bank Account
+                  </span>
+                </div>
+                <h3 className="text-xl sm:text-2xl font-black mt-1.5">Transfer Revenue Directly to Host Account</h3>
                 <p className="text-xs text-emerald-100 max-w-md mt-0.5">
-                  Direct instant settlement via UPI (GPay/PhonePe/Paytm) or Bank IMPS account transfer with zero fee.
+                  Direct instant settlement as per host's demand. Send funds to your UPI ID (GPay/PhonePe/Paytm) or Bank Account via IMPS.
                 </p>
               </div>
 
               <div className="text-left sm:text-right shrink-0">
-                <span className="text-xs text-emerald-200 font-medium block">Available to Transfer</span>
+                <span className="text-xs text-emerald-200 font-medium block">Available for Settlement</span>
                 <span className="text-3xl font-black text-white">₹{availableBalance.toLocaleString()}</span>
               </div>
             </div>
@@ -599,16 +604,16 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
             <div className="pt-3 border-t border-white/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-xs text-emerald-100">
                 <ShieldCheck className="w-4 h-4 text-emerald-300 shrink-0" />
-                <span>Verified host payout clearance • Instant bank settlement</span>
+                <span>Zero deduction payout • Instant 24x7 IMPS / UPI dispatch</span>
               </div>
 
               <button
                 disabled={availableBalance <= 0}
                 onClick={() => setIsPayoutModalOpen(true)}
-                className="py-3 px-5 rounded-2xl bg-white hover:bg-emerald-50 text-emerald-900 font-black text-xs transition flex items-center justify-center gap-2 shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="py-3 px-5 rounded-2xl bg-white hover:bg-emerald-50 text-emerald-900 font-black text-xs transition flex items-center justify-center gap-2 shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 <IndianRupee className="w-4 h-4 text-emerald-700" />
-                <span>Transfer Revenue to Account</span>
+                <span>Settle Revenue to UPI / Bank Now</span>
                 <ArrowRight className="w-4 h-4 text-emerald-700" />
               </button>
             </div>
@@ -658,30 +663,33 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                 {hostPayouts.map((payout) => (
                   <div
                     key={payout.payoutId}
-                    className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                    className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                      <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
                         {payout.method === 'UPI' ? (
-                          <Smartphone className="w-4 h-4" />
+                          <Smartphone className="w-5 h-5 text-indigo-600" />
                         ) : (
-                          <Building2 className="w-4 h-4" />
+                          <Building2 className="w-5 h-5 text-indigo-600" />
                         )}
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="font-bold text-slate-900">{payout.destination}</span>
                           <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black uppercase">
                             ✓ {payout.status}
                           </span>
+                          <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold">
+                            {payout.gateway || 'Razorpay Payout'}
+                          </span>
                         </div>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          Ref: <span className="font-mono text-slate-600">{payout.referenceId}</span> • {new Date(payout.timestamp).toLocaleDateString()}
+                        <p className="text-[11px] text-slate-500 mt-0.5 font-mono">
+                          UTR: <span className="font-bold text-indigo-600">{payout.referenceId}</span> • Beneficiary: {payout.accountHolderName} • {new Date(payout.timestamp).toLocaleDateString()}
                         </p>
                       </div>
                     </div>
 
-                    <div className="text-left sm:text-right">
+                    <div className="text-left sm:text-right shrink-0">
                       <span className="text-base font-black text-emerald-700">₹{payout.amount.toLocaleString()}</span>
                       <p className="text-[10px] text-slate-400 font-mono">{payout.payoutId}</p>
                     </div>

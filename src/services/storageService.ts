@@ -449,6 +449,12 @@ export class StorageService {
     localStorage.setItem(STORAGE_KEYS.PAYOUTS, JSON.stringify(payouts));
   }
 
+  static savePayoutRecord(payout: PayoutRecord): void {
+    const payouts = this.getPayouts();
+    payouts.unshift(payout);
+    this.savePayouts(payouts);
+  }
+
   static createPayout(payoutData: Omit<PayoutRecord, 'payoutId' | 'status' | 'referenceId' | 'timestamp'>): PayoutRecord {
     const payouts = this.getPayouts();
     const newPayout: PayoutRecord = {
