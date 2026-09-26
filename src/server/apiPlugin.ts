@@ -142,6 +142,22 @@ export function apiServerPlugin(): Plugin {
           });
         }
 
+        // 2b. Clear / Reset All Data
+        if (url === '/api/clear-database' && (req.method === 'POST' || req.method === 'DELETE')) {
+          db.events = [];
+          db.tickets = [];
+          db.accounts = [];
+          db.payouts = [];
+          saveDatabase(db);
+          return sendJson(res, 200, {
+            success: true,
+            message: 'All database data (events, tickets, accounts, payouts) has been completely cleared.',
+            eventsCount: 0,
+            ticketsCount: 0,
+            accountsCount: 0,
+          });
+        }
+
         // 3. Events endpoints
         if (url === '/api/events') {
           if (req.method === 'GET') {

@@ -71,58 +71,55 @@ export class StorageService {
         }
       }
 
-      // 3. Merge Events
+      // One-time client wipe check for fresh start
+      if (typeof window !== 'undefined' && localStorage.getItem('festplus_clean_wipe_v1') !== 'true') {
+        localStorage.removeItem(STORAGE_KEYS.EVENTS);
+        localStorage.removeItem(STORAGE_KEYS.TICKETS);
+        localStorage.removeItem(STORAGE_KEYS.ACCOUNTS);
+        localStorage.removeItem(STORAGE_KEYS.PAYOUTS);
+        localStorage.removeItem(STORAGE_KEYS.BOOKMARKS);
+        localStorage.removeItem('festplus_auth_user_v1');
+        localStorage.removeItem('festplus_jwt_token');
+        localStorage.setItem('festplus_clean_wipe_v1', 'true');
+      }
+
+      // 3. Merge Events (if remote is empty, keep clean)
       const localEvents = this.getEvents();
-      const eventMap = new Map<string, CollegeEvent>();
-      // First populate with local
-      localEvents.forEach(e => eventMap.set(e.eventId, e));
-      // Overwrite/enrich with remote
-      remoteEvents.forEach(e => eventMap.set(e.eventId, e));
-      const mergedEvents = Array.from(eventMap.values());
-      this.saveEvents(mergedEvents);
-
-      // If local had events that are not yet on the cloud server, upload them
-      if (localEvents.length > remoteEvents.length) {
-        for (const evt of localEvents) {
-          if (!remoteEvents.some(r => r.eventId === evt.eventId)) {
-            fetch('/api/events', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(evt),
-            }).catch(() => {});
-          }
-        }
+      if (remoteEvents.length === 0) {
+        this.saveEvents([]);
+      } else {
+        const eventMap = new Map<string, CollegeEvent>();
+        localEvents.forEach(e => eventMap.set(e.eventId, e));
+        remoteEvents.forEach(e => eventMap.set(e.eventId, e));
+        this.saveEvents(Array.from(eventMap.values()));
       }
 
-      // 4. Merge Tickets
+      // 4. Merge Tickets (if remote is empty, keep clean)
       const localTickets = this.getTickets();
-      const ticketMap = new Map<string, Ticket>();
-      localTickets.forEach(t => ticketMap.set(t.ticketId, t));
-      remoteTickets.forEach(t => ticketMap.set(t.ticketId, t));
-      const mergedTickets = Array.from(ticketMap.values());
-      this.saveTickets(mergedTickets);
-
-      if (localTickets.length > remoteTickets.length) {
-        for (const tkt of localTickets) {
-          if (!remoteTickets.some(r => r.ticketId === tkt.ticketId)) {
-            fetch('/api/tickets', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(tkt),
-            }).catch(() => {});
-          }
-        }
+      if (remoteTickets.length === 0) {
+        this.saveTickets([]);
+      } else {
+        const ticketMap = new Map<string, Ticket>();
+        localTickets.forEach(t => ticketMap.set(t.ticketId, t));
+        remoteTickets.forEach(t => ticketMap.set(t.ticketId, t));
+        this.saveTickets(Array.from(ticketMap.values()));
       }
 
-      // 5. Merge Accounts
+      // 5. Merge Accounts (if remote is empty, keep clean)
       const localAccounts = this.getRegisteredAccounts();
-      const accountMap = new Map<string, RegisteredAccount>();
-      localAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
-      remoteAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
-      this.saveRegisteredAccounts(Array.from(accountMap.values()));
+      if (remoteAccounts.length === 0) {
+        this.saveRegisteredAccounts([]);
+      } else {
+        const accountMap = new Map<string, RegisteredAccount>();
+        localAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
+        remoteAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
+        this.saveRegisteredAccounts(Array.from(accountMap.values()));
+      }
 
       // 6. Merge Payouts
-      if (remotePayouts.length > 0) {
+      if (remotePayouts.length === 0) {
+        this.savePayouts([]);
+      } else {
         const localPayouts = this.getPayouts();
         const payoutMap = new Map<string, PayoutRecord>();
         localPayouts.forEach(p => payoutMap.set(p.payoutId, p));
@@ -130,16 +127,41 @@ export class StorageService {
         this.savePayouts(Array.from(payoutMap.values()));
       }
 
-      // 7. Background sync with Firestore if initialized
-      FirebaseDbService.getEvents().then(fbEvents => {
+      // 7. Two-way sync with Firestore: download from Firestore or upload local data if Firestore is empty
+      try {
+        const [fbEvents, fbTickets] = await Promise.all([
+          FirebaseDbService.getEvents(),
+          FirebaseDbService.getTickets(),
+        ]);
+
+        const curEvents = this.getEvents();
         if (fbEvents && fbEvents.length > 0) {
-          const curEvents = this.getEvents();
           const emap = new Map<string, CollegeEvent>();
           curEvents.forEach(e => emap.set(e.eventId, e));
           fbEvents.forEach(e => emap.set(e.eventId, e));
           this.saveEvents(Array.from(emap.values()));
+        } else if (curEvents.length > 0) {
+          // Firestore has no events yet: push all existing events to populate the 'events' collection
+          for (const evt of curEvents) {
+            FirebaseDbService.saveEvent(evt).catch(() => {});
+          }
         }
-      }).catch(() => {});
+
+        const curTickets = this.getTickets();
+        if (fbTickets && fbTickets.length > 0) {
+          const tmap = new Map<string, Ticket>();
+          curTickets.forEach(t => tmap.set(t.ticketId, t));
+          fbTickets.forEach(t => tmap.set(t.ticketId, t));
+          this.saveTickets(Array.from(tmap.values()));
+        } else if (curTickets.length > 0) {
+          // Firestore has no tickets yet: push all existing tickets to populate the 'tickets' collection
+          for (const tkt of curTickets) {
+            FirebaseDbService.saveTicket(tkt).catch(() => {});
+          }
+        }
+      } catch (fbErr) {
+        console.warn('Firestore two-way sync warning:', fbErr);
+      }
 
       return {
         eventsCount: this.getEvents().length,
@@ -176,7 +198,8 @@ export class StorageService {
         !e.eventId.startsWith('evt-cultural-night') && 
         !e.eventId.startsWith('evt-esports-championship') && 
         !e.eventId.startsWith('evt-ai-workshop') && 
-        !e.eventId.startsWith('evt-inter-college-derby')
+        !e.eventId.startsWith('evt-inter-college-derby') &&
+        !e.eventId.startsWith('evt-muefnnqg-duty')
       );
       if (cleaned.length !== parsed.length) {
         this.saveEvents(cleaned);
@@ -286,7 +309,8 @@ export class StorageService {
         !t.ticketId.startsWith('TKT-88492014') && 
         !t.ticketId.startsWith('TKT-77382910') && 
         !t.ticketId.startsWith('TKT-66291044') && 
-        !t.ticketId.startsWith('TKT-55182903')
+        !t.ticketId.startsWith('TKT-55182903') &&
+        t.eventId !== 'evt-muefnnqg-duty'
       );
       if (cleaned.length !== parsed.length) {
         this.saveTickets(cleaned);
@@ -302,6 +326,25 @@ export class StorageService {
       });
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * Completely clears all data (Events, Tickets, Accounts, Payouts, Sessions)
+   */
+  static async clearAllData(): Promise<void> {
+    localStorage.removeItem(STORAGE_KEYS.EVENTS);
+    localStorage.removeItem(STORAGE_KEYS.TICKETS);
+    localStorage.removeItem(STORAGE_KEYS.ACCOUNTS);
+    localStorage.removeItem(STORAGE_KEYS.PAYOUTS);
+    localStorage.removeItem(STORAGE_KEYS.BOOKMARKS);
+    localStorage.removeItem('festplus_auth_user_v1');
+    localStorage.removeItem('festplus_jwt_token');
+
+    try {
+      await fetch('/api/clear-database', { method: 'POST' });
+    } catch {
+      // safe fallback
     }
   }
 

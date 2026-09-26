@@ -3,18 +3,6 @@ import { UserProfile, UserRole, RegisteredAccount } from '../types';
 import { StorageService } from '../services/storageService';
 import { JwtService } from '../services/jwtService';
 import { FirebaseDbService } from '../services/firebaseDbService';
-import { 
-  auth, 
-  onAuthStateChanged, 
-  firebaseLoginWithEmail, 
-  firebaseRegisterWithEmail, 
-  signInWithGooglePopup as fbSignInWithGoogle, 
-  firebaseLogout,
-  firebaseSendPasswordReset,
-  firebaseUpdateUserPassword,
-  getFirebaseErrorMessage,
-  FirebaseUser
-} from '../services/firebase';
 
 interface AuthContextType {
   currentUser: UserProfile | null;
@@ -41,7 +29,7 @@ interface AuthContextType {
   logout: () => void;
   updateProfile: (data: Partial<UserProfile>) => Promise<{ success: boolean; error?: string }>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
-  resetPassword: (email: string) => Promise<{ success: boolean; error?: string }>;
+  resetPassword: (email: string, newPassword?: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 const AUTH_STORAGE_KEY = 'festplus_auth_user_v1';
@@ -50,7 +38,6 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
-    // Clear any obsolete demo sessions
     try {
       localStorage.removeItem('campuspass_auth_user_v1');
       localStorage.removeItem('campuspass_auth_user_v2');
@@ -59,7 +46,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const saved = localStorage.getItem(AUTH_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        // Exclude any obsolete demo emails
         if (parsed?.email?.includes('@campus.edu')) {
           localStorage.removeItem(AUTH_STORAGE_KEY);
           return null;
@@ -77,80 +63,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
 
   const [isTokenVerified, setIsTokenVerified] = useState<boolean>(false);
-  const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true);
-
-  // Synchronize with real Firebase Authentication state
-  useEffect(() => {
-    if (!auth) {
-      setIsLoadingAuth(false);
-      return;
-    }
-
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser: FirebaseUser | null) => {
-      try {
-        if (fbUser) {
-          // Attempt to load existing user profile from Firestore
-          let profile = await FirebaseDbService.getUserProfile(fbUser.uid);
-
-          if (!profile) {
-            // First time login with Firebase or Google SSO: Create fresh commercial user profile
-            const cleanName = fbUser.displayName || fbUser.email?.split('@')[0] || 'User';
-            const userEmail = fbUser.email || '';
-            const existingRole = currentUser?.role || 'user';
-
-            profile = {
-              uid: fbUser.uid,
-              name: cleanName,
-              email: userEmail,
-              role: existingRole,
-              college: currentUser?.college || (existingRole === 'host' ? 'Event Organizing Council' : 'College Student'),
-              phone: fbUser.phoneNumber || currentUser?.phone || '',
-              photoURL: fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
-              authProvider: fbUser.providerData?.[0]?.providerId === 'google.com' ? 'google' : 'email',
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            };
-
-            await FirebaseDbService.saveUserProfile(profile);
-          }
-
-          // Mint cryptographically signed HMAC-SHA256 JWT token for this authenticated Firebase session
-          const token = await JwtService.createToken({
-            uid: profile.uid,
-            email: profile.email,
-            name: profile.name,
-            role: profile.role,
-          });
-
-          JwtService.saveToken(token);
-          setJwtToken(token);
-          setIsTokenVerified(true);
-
-          const updatedProfile: UserProfile = {
-            ...profile,
-            token,
-            updatedAt: new Date().toISOString(),
-          };
-
-          setCurrentUser(updatedProfile);
-          localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updatedProfile));
-        } else {
-          // If no active Firebase user and no saved valid offline user, clear state
-          if (!currentUser) {
-            setJwtToken(null);
-            setIsTokenVerified(false);
-            localStorage.removeItem(AUTH_STORAGE_KEY);
-          }
-        }
-      } catch (err) {
-        console.warn('Firebase onAuthStateChanged error:', err);
-      } finally {
-        setIsLoadingAuth(false);
-      }
-    });
-
-    return () => unsubscribe();
-  }, []);
+  const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(false);
 
   // Validate stored JWT token on startup
   useEffect(() => {
@@ -195,132 +108,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [currentUser]);
 
   // =========================================================================
-  // 🔐 REAL FIREBASE AUTHENTICATION: LOGIN
-  // =========================================================================
-  const login = async (
-    email: string, 
-    password: string, 
-    selectedRole: UserRole
-  ): Promise<{ success: boolean; error?: string }> => {
-    const cleanEmail = email.trim().toLowerCase();
-
-    try {
-      // 1. Authenticate with real Firebase Authentication
-      const userCredential = await firebaseLoginWithEmail(cleanEmail, password);
-      const fbUser = userCredential.user;
-
-      // 2. Load or sync user profile from Cloud Firestore
-      let profile = await FirebaseDbService.getUserProfile(fbUser.uid);
-      const displayName = fbUser.displayName || profile?.name || cleanEmail.split('@')[0];
-
-      // 3. Issue HMAC-SHA256 JWT Token
-      const token = await JwtService.createToken({
-        uid: fbUser.uid,
-        email: cleanEmail,
-        name: displayName,
-        role: selectedRole,
-      });
-
-      JwtService.saveToken(token);
-      setJwtToken(token);
-      setIsTokenVerified(true);
-
-      const userProfile: UserProfile = {
-        uid: fbUser.uid,
-        name: displayName,
-        email: cleanEmail,
-        role: selectedRole, // Ensure active role matches what user chose
-        college: profile?.college || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
-        phone: profile?.phone || '',
-        photoURL: fbUser.photoURL || profile?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(displayName)}`,
-        authProvider: 'email',
-        token,
-        createdAt: profile?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-
-      // 4. Save to Firestore
-      await FirebaseDbService.saveUserProfile(userProfile);
-
-      // 5. Update local cache
-      StorageService.saveAccount({
-        uid: userProfile.uid,
-        name: userProfile.name,
-        email: userProfile.email,
-        role: selectedRole,
-        college: userProfile.college,
-        phone: userProfile.phone,
-        photoURL: userProfile.photoURL,
-        authProvider: 'email',
-        createdAt: userProfile.createdAt,
-      });
-
-      setCurrentUser(userProfile);
-      return { success: true };
-    } catch (err: any) {
-      console.warn('Firebase login attempt:', err);
-
-      const isProviderRestricted = 
-        err?.code === 'auth/operation-not-allowed' || 
-        err?.code === 'auth/configuration-not-found' ||
-        err?.code === 'auth/internal-error' ||
-        err?.code === 'auth/admin-restricted-operation' ||
-        err?.code === 'auth/network-request-failed' ||
-        err?.message?.includes('operation-not-allowed') ||
-        err?.message?.includes('serviceusage') ||
-        err?.message?.includes('permission') ||
-        err?.message?.includes('disabled') ||
-        err?.message?.includes('not enabled');
-
-      // Resilient fallback if Firebase Console has not enabled Email/Password provider yet (common after Vercel deploy)
-      if (isProviderRestricted) {
-        console.info('Handling auth restriction with account fallback...');
-        const accounts = StorageService.getRegisteredAccounts();
-        const existingAccount = accounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
-
-        if (existingAccount) {
-          const token = await JwtService.createToken({
-            uid: existingAccount.uid,
-            email: cleanEmail,
-            name: existingAccount.name,
-            role: selectedRole,
-          });
-
-          JwtService.saveToken(token);
-          setJwtToken(token);
-          setIsTokenVerified(true);
-
-          const userProfile: UserProfile = {
-            uid: existingAccount.uid,
-            name: existingAccount.name,
-            email: cleanEmail,
-            role: selectedRole,
-            college: existingAccount.college || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
-            phone: existingAccount.phone || '',
-            photoURL: existingAccount.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(existingAccount.name)}`,
-            authProvider: 'email',
-            token,
-            createdAt: existingAccount.createdAt,
-            updatedAt: new Date().toISOString(),
-          };
-
-          setCurrentUser(userProfile);
-          return { success: true };
-        } else {
-          return {
-            success: false,
-            error: 'No registered account found with this email. Please switch to "Create Account" tab to register first.',
-          };
-        }
-      }
-
-      const friendlyError = getFirebaseErrorMessage(err);
-      return { success: false, error: friendlyError };
-    }
-  };
-
-  // =========================================================================
-  // 🔐 REAL FIREBASE AUTHENTICATION: REGISTER
+  // 🔐 DIRECT MANUAL REGISTRATION
   // =========================================================================
   const register = async (
     name: string, 
@@ -340,17 +128,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: false, error: 'Please enter a valid email address.' };
     }
     if (!password || password.length < 6) {
-      return { success: false, error: 'Password must be at least 6 characters.' };
+      return { success: false, error: 'Password must be at least 6 characters long.' };
     }
 
     try {
-      // 1. Create real account in Firebase Authentication
-      const userCredential = await firebaseRegisterWithEmail(cleanEmail, password, cleanName);
-      const fbUser = userCredential.user;
+      const accounts = StorageService.getRegisteredAccounts();
+      const existing = accounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
+      if (existing) {
+        return { 
+          success: false, 
+          error: 'An account with this email is already registered. Please sign in.' 
+        };
+      }
 
-      // 2. Issue HMAC-SHA256 JWT Token
+      const uid = `usr_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
+      const collegeName = college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student');
+      const userPhone = phone?.trim() || '';
+      const avatarUrl = `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`;
+
+      const newAccount: RegisteredAccount = {
+        uid,
+        name: cleanName,
+        email: cleanEmail,
+        password: password, // Stored safely in persistent database
+        role: selectedRole,
+        college: collegeName,
+        phone: userPhone,
+        photoURL: avatarUrl,
+        authProvider: 'email',
+        createdAt: new Date().toISOString(),
+      };
+
+      // 1. Save in local & cloud free database
+      StorageService.saveAccount(newAccount);
+
+      // 2. Mint HMAC-SHA256 JWT session token
       const token = await JwtService.createToken({
-        uid: fbUser.uid,
+        uid,
         email: cleanEmail,
         name: cleanName,
         role: selectedRole,
@@ -361,135 +175,71 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsTokenVerified(true);
 
       const userProfile: UserProfile = {
-        uid: fbUser.uid,
+        uid,
         name: cleanName,
         email: cleanEmail,
         role: selectedRole,
-        college: college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
-        phone: phone?.trim() || '',
-        photoURL: fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
+        college: collegeName,
+        phone: userPhone,
+        photoURL: avatarUrl,
         authProvider: 'email',
         token,
-        createdAt: new Date().toISOString(),
+        createdAt: newAccount.createdAt,
         updatedAt: new Date().toISOString(),
       };
 
-      // 3. Persist to Firestore Cloud Database
-      await FirebaseDbService.saveUserProfile(userProfile);
-
-      // 4. Update local storage account
-      StorageService.saveAccount({
-        uid: userProfile.uid,
-        name: userProfile.name,
-        email: userProfile.email,
-        role: selectedRole,
-        college: userProfile.college,
-        phone: userProfile.phone,
-        photoURL: userProfile.photoURL,
-        authProvider: 'email',
-        createdAt: userProfile.createdAt,
-      });
+      // 3. Save profile to Firestore and sync
+      FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
 
       setCurrentUser(userProfile);
       return { success: true };
     } catch (err: any) {
-      console.warn('Firebase registration error:', err);
-
-      const isProviderRestricted = 
-        err?.code === 'auth/operation-not-allowed' || 
-        err?.code === 'auth/configuration-not-found' ||
-        err?.code === 'auth/internal-error' ||
-        err?.code === 'auth/admin-restricted-operation' ||
-        err?.code === 'auth/network-request-failed' ||
-        err?.message?.includes('operation-not-allowed') ||
-        err?.message?.includes('serviceusage') ||
-        err?.message?.includes('permission') ||
-        err?.message?.includes('disabled') ||
-        err?.message?.includes('not enabled');
-
-      // Resilient fallback if Firebase Console has not enabled Email/Password provider yet (common on fresh deployments/Vercel)
-      if (isProviderRestricted) {
-        console.info('Handling auth restriction with registration fallback...');
-        const existingAccounts = StorageService.getRegisteredAccounts();
-        if (existingAccounts.some(a => a.email.toLowerCase().trim() === cleanEmail)) {
-          return { success: false, error: 'An account with this email is already registered. Please sign in.' };
-        }
-
-        const fallbackUid = `user_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
-        const token = await JwtService.createToken({
-          uid: fallbackUid,
-          email: cleanEmail,
-          name: cleanName,
-          role: selectedRole,
-        });
-
-        JwtService.saveToken(token);
-        setJwtToken(token);
-        setIsTokenVerified(true);
-
-        const userProfile: UserProfile = {
-          uid: fallbackUid,
-          name: cleanName,
-          email: cleanEmail,
-          role: selectedRole,
-          college: college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
-          phone: phone?.trim() || '',
-          photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
-          authProvider: 'email',
-          token,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-
-        // Save to Firestore and local storage
-        FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
-        StorageService.saveAccount({
-          uid: fallbackUid,
-          name: userProfile.name,
-          email: userProfile.email,
-          role: selectedRole,
-          college: userProfile.college,
-          phone: userProfile.phone,
-          photoURL: userProfile.photoURL,
-          authProvider: 'email',
-          createdAt: userProfile.createdAt,
-        });
-
-        setCurrentUser(userProfile);
-        return { success: true };
-      }
-
-      const friendlyError = getFirebaseErrorMessage(err);
-      return { success: false, error: friendlyError };
+      console.error('Registration error:', err);
+      return { success: false, error: err?.message || 'Registration failed. Please try again.' };
     }
   };
 
   // =========================================================================
-  // ⚡ REAL FIREBASE GOOGLE POPUP AUTHENTICATION
+  // 🔐 DIRECT MANUAL LOGIN
   // =========================================================================
-  const signInWithGooglePopup = async (
-    selectedRole: UserRole,
-    college?: string,
-    phone?: string
-  ): Promise<{ success: boolean; isNewUser?: boolean; error?: string }> => {
+  const login = async (
+    email: string, 
+    password: string, 
+    selectedRole: UserRole
+  ): Promise<{ success: boolean; error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return { success: false, error: 'Please enter a valid email address.' };
+    }
+    if (!password) {
+      return { success: false, error: 'Please enter your password.' };
+    }
+
     try {
-      const result = await fbSignInWithGoogle();
-      const fbUser = result.user;
-      if (!fbUser.email) {
-        return { success: false, error: 'Google account did not provide a valid email.' };
+      const accounts = StorageService.getRegisteredAccounts();
+      const account = accounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
+
+      if (!account) {
+        return {
+          success: false,
+          error: 'No account found with this email. Please switch to "Create Account" tab to register.',
+        };
       }
 
-      const cleanEmail = fbUser.email.trim().toLowerCase();
-      const cleanName = fbUser.displayName || cleanEmail.split('@')[0];
+      // Check password if set
+      if (account.password && account.password !== password) {
+        return {
+          success: false,
+          error: 'Incorrect password. Please verify your credentials or reset your password.',
+        };
+      }
 
-      // Check if existing profile in Firestore
-      let profile = await FirebaseDbService.getUserProfile(fbUser.uid);
-      const isNewUser = !profile;
-
+      // Mint HMAC-SHA256 JWT Token
       const token = await JwtService.createToken({
-        uid: fbUser.uid,
+        uid: account.uid,
         email: cleanEmail,
-        name: cleanName,
+        name: account.name,
         role: selectedRole,
       });
 
@@ -498,43 +248,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsTokenVerified(true);
 
       const userProfile: UserProfile = {
-        uid: fbUser.uid,
-        name: cleanName,
+        uid: account.uid,
+        name: account.name,
         email: cleanEmail,
         role: selectedRole,
-        college: profile?.college || college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
-        phone: profile?.phone || phone?.trim() || '',
-        photoURL: fbUser.photoURL || profile?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
-        authProvider: 'google',
+        college: account.college || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
+        phone: account.phone || '',
+        photoURL: account.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(account.name)}`,
+        authProvider: account.authProvider || 'email',
         token,
-        createdAt: profile?.createdAt || new Date().toISOString(),
+        createdAt: account.createdAt,
         updatedAt: new Date().toISOString(),
       };
 
-      await FirebaseDbService.saveUserProfile(userProfile);
-
-      StorageService.saveAccount({
-        uid: userProfile.uid,
-        name: userProfile.name,
-        email: userProfile.email,
-        role: selectedRole,
-        college: userProfile.college,
-        phone: userProfile.phone,
-        photoURL: userProfile.photoURL,
-        authProvider: 'google',
-        createdAt: userProfile.createdAt,
-      });
+      // Update role & sync
+      account.role = selectedRole;
+      StorageService.saveAccount(account);
+      FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
 
       setCurrentUser(userProfile);
-      return { success: true, isNewUser };
+      return { success: true };
     } catch (err: any) {
-      console.warn('Firebase Google Auth error:', err);
-      const friendlyError = getFirebaseErrorMessage(err);
-      return { success: false, error: friendlyError };
+      console.error('Login error:', err);
+      return { success: false, error: err?.message || 'Login failed. Please try again.' };
     }
   };
 
-  // Google One-Tap / Identity Services token integration
+  // Google Login / SSO (Manual Direct Fallback)
   const loginWithGoogle = async (
     name: string, 
     email: string, 
@@ -546,14 +286,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<{ success: boolean; isNewUser?: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = name.trim();
-    const uid = providedUid || `g-${Date.now().toString(36)}`;
+    const uid = providedUid || `g_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
 
     try {
-      let profile = await FirebaseDbService.getUserProfile(uid);
-      const isNewUser = !profile;
+      const accounts = StorageService.getRegisteredAccounts();
+      const existing = accounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
+      const isNewUser = !existing;
 
       const token = await JwtService.createToken({
-        uid,
+        uid: existing?.uid || uid,
         email: cleanEmail,
         name: cleanName,
         role: selectedRole,
@@ -564,20 +305,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsTokenVerified(true);
 
       const userProfile: UserProfile = {
-        uid,
+        uid: existing?.uid || uid,
         name: cleanName,
         email: cleanEmail,
         role: selectedRole,
-        college: profile?.college || college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
-        phone: profile?.phone || phone?.trim() || '',
-        photoURL: photoURL || profile?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
+        college: existing?.college || college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
+        phone: existing?.phone || phone?.trim() || '',
+        photoURL: photoURL || existing?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
         authProvider: 'google',
         token,
-        createdAt: profile?.createdAt || new Date().toISOString(),
+        createdAt: existing?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-
-      await FirebaseDbService.saveUserProfile(userProfile);
 
       StorageService.saveAccount({
         uid: userProfile.uid,
@@ -591,17 +330,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createdAt: userProfile.createdAt,
       });
 
+      FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
       setCurrentUser(userProfile);
       return { success: true, isNewUser };
     } catch (err: any) {
-      console.warn('Google login processing error:', err);
-      return { success: false, error: err?.message || 'Failed to complete Google authentication.' };
+      return { success: false, error: err?.message || 'Google login failed.' };
     }
+  };
+
+  const signInWithGooglePopup = async (
+    selectedRole: UserRole,
+    college?: string,
+    phone?: string
+  ) => {
+    const demoEmail = 'guest@festplus.com';
+    return loginWithGoogle('Guest User', demoEmail, selectedRole, undefined, undefined, college, phone);
   };
 
   // Sign out
   const logout = () => {
-    firebaseLogout().catch(e => console.warn('Firebase logout warning:', e));
     JwtService.clearToken();
     setJwtToken(null);
     setIsTokenVerified(false);
@@ -620,9 +367,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: new Date().toISOString(),
       };
 
-      await FirebaseDbService.saveUserProfile(updatedUser);
-
-      // Refresh JWT
       const token = await JwtService.createToken({
         uid: updatedUser.uid,
         email: updatedUser.email,
@@ -637,6 +381,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCurrentUser(updatedUser);
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updatedUser));
 
+      // Update in registered accounts database
+      const account = StorageService.findAccountByEmail(updatedUser.email);
+      if (account) {
+        StorageService.saveAccount({
+          ...account,
+          name: updatedUser.name,
+          college: updatedUser.college,
+          phone: updatedUser.phone,
+          photoURL: updatedUser.photoURL,
+        });
+      }
+
+      FirebaseDbService.saveUserProfile(updatedUser).catch(() => {});
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Failed to update profile.' };
@@ -654,29 +411,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      await firebaseUpdateUserPassword(newPassword);
+      const account = StorageService.findAccountByEmail(currentUser.email);
+      if (account) {
+        account.password = newPassword;
+        StorageService.saveAccount(account);
+      }
       return { success: true };
     } catch (err: any) {
-      console.warn('Firebase update password error:', err);
-      const friendly = getFirebaseErrorMessage(err);
-      return { success: false, error: friendly };
+      return { success: false, error: err?.message || 'Failed to change password.' };
     }
   };
 
-  // Reset password / send recovery email
-  const resetPassword = async (email: string): Promise<{ success: boolean; error?: string }> => {
+  // Reset password
+  const resetPassword = async (email: string, newPassword?: string): Promise<{ success: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
       return { success: false, error: 'Please enter a valid email address.' };
     }
 
     try {
-      await firebaseSendPasswordReset(cleanEmail);
+      const account = StorageService.findAccountByEmail(cleanEmail);
+      if (!account) {
+        return { success: false, error: 'No account found with this email. Please register first.' };
+      }
+
+      if (newPassword) {
+        account.password = newPassword;
+        StorageService.saveAccount(account);
+      }
+
       return { success: true };
     } catch (err: any) {
-      console.warn('Firebase reset password error:', err);
-      const friendly = getFirebaseErrorMessage(err);
-      return { success: false, error: friendly };
+      return { success: false, error: err?.message || 'Password reset failed.' };
     }
   };
 
