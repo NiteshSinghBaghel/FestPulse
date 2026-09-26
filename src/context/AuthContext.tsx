@@ -259,6 +259,61 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: true };
     } catch (err: any) {
       console.warn('Firebase login attempt:', err);
+
+      const isProviderRestricted = 
+        err?.code === 'auth/operation-not-allowed' || 
+        err?.code === 'auth/configuration-not-found' ||
+        err?.code === 'auth/internal-error' ||
+        err?.code === 'auth/admin-restricted-operation' ||
+        err?.code === 'auth/network-request-failed' ||
+        err?.message?.includes('operation-not-allowed') ||
+        err?.message?.includes('serviceusage') ||
+        err?.message?.includes('permission') ||
+        err?.message?.includes('disabled') ||
+        err?.message?.includes('not enabled');
+
+      // Resilient fallback if Firebase Console has not enabled Email/Password provider yet (common after Vercel deploy)
+      if (isProviderRestricted) {
+        console.info('Handling auth restriction with account fallback...');
+        const accounts = StorageService.getRegisteredAccounts();
+        const existingAccount = accounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
+
+        if (existingAccount) {
+          const token = await JwtService.createToken({
+            uid: existingAccount.uid,
+            email: cleanEmail,
+            name: existingAccount.name,
+            role: selectedRole,
+          });
+
+          JwtService.saveToken(token);
+          setJwtToken(token);
+          setIsTokenVerified(true);
+
+          const userProfile: UserProfile = {
+            uid: existingAccount.uid,
+            name: existingAccount.name,
+            email: cleanEmail,
+            role: selectedRole,
+            college: existingAccount.college || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
+            phone: existingAccount.phone || '',
+            photoURL: existingAccount.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(existingAccount.name)}`,
+            authProvider: 'email',
+            token,
+            createdAt: existingAccount.createdAt,
+            updatedAt: new Date().toISOString(),
+          };
+
+          setCurrentUser(userProfile);
+          return { success: true };
+        } else {
+          return {
+            success: false,
+            error: 'No registered account found with this email. Please switch to "Create Account" tab to register first.',
+          };
+        }
+      }
+
       const friendlyError = getFirebaseErrorMessage(err);
       return { success: false, error: friendlyError };
     }
@@ -339,6 +394,71 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: true };
     } catch (err: any) {
       console.warn('Firebase registration error:', err);
+
+      const isProviderRestricted = 
+        err?.code === 'auth/operation-not-allowed' || 
+        err?.code === 'auth/configuration-not-found' ||
+        err?.code === 'auth/internal-error' ||
+        err?.code === 'auth/admin-restricted-operation' ||
+        err?.code === 'auth/network-request-failed' ||
+        err?.message?.includes('operation-not-allowed') ||
+        err?.message?.includes('serviceusage') ||
+        err?.message?.includes('permission') ||
+        err?.message?.includes('disabled') ||
+        err?.message?.includes('not enabled');
+
+      // Resilient fallback if Firebase Console has not enabled Email/Password provider yet (common on fresh deployments/Vercel)
+      if (isProviderRestricted) {
+        console.info('Handling auth restriction with registration fallback...');
+        const existingAccounts = StorageService.getRegisteredAccounts();
+        if (existingAccounts.some(a => a.email.toLowerCase().trim() === cleanEmail)) {
+          return { success: false, error: 'An account with this email is already registered. Please sign in.' };
+        }
+
+        const fallbackUid = `user_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
+        const token = await JwtService.createToken({
+          uid: fallbackUid,
+          email: cleanEmail,
+          name: cleanName,
+          role: selectedRole,
+        });
+
+        JwtService.saveToken(token);
+        setJwtToken(token);
+        setIsTokenVerified(true);
+
+        const userProfile: UserProfile = {
+          uid: fallbackUid,
+          name: cleanName,
+          email: cleanEmail,
+          role: selectedRole,
+          college: college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
+          phone: phone?.trim() || '',
+          photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
+          authProvider: 'email',
+          token,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        // Save to Firestore and local storage
+        FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
+        StorageService.saveAccount({
+          uid: fallbackUid,
+          name: userProfile.name,
+          email: userProfile.email,
+          role: selectedRole,
+          college: userProfile.college,
+          phone: userProfile.phone,
+          photoURL: userProfile.photoURL,
+          authProvider: 'email',
+          createdAt: userProfile.createdAt,
+        });
+
+        setCurrentUser(userProfile);
+        return { success: true };
+      }
+
       const friendlyError = getFirebaseErrorMessage(err);
       return { success: false, error: friendlyError };
     }

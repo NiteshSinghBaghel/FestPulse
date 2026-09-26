@@ -244,7 +244,14 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
           onSuccess();
         }, 500);
       } else {
-        if (res.error?.includes('unauthorized-domain')) {
+        const errLower = (res.error || '').toLowerCase();
+        if (
+          errLower.includes('unauthorized-domain') || 
+          errLower.includes('operation-not-allowed') || 
+          errLower.includes('serviceusage') || 
+          errLower.includes('permission') ||
+          errLower.includes('internal-error')
+        ) {
           setDomainHelperEmail(email || '');
           setShowDomainHelper(true);
         } else {
@@ -252,7 +259,14 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
         }
       }
     } catch (err: any) {
-      if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('unauthorized-domain')) {
+      const errStr = (err?.message || err?.code || '').toLowerCase();
+      if (
+        errStr.includes('unauthorized-domain') || 
+        errStr.includes('operation-not-allowed') || 
+        errStr.includes('serviceusage') || 
+        errStr.includes('permission') ||
+        errStr.includes('internal-error')
+      ) {
         setDomainHelperEmail(email || '');
         setShowDomainHelper(true);
       } else {
