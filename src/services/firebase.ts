@@ -26,6 +26,7 @@ const firebaseConfig = {
   storageBucket: firebaseConfigJson.storageBucket,
   messagingSenderId: firebaseConfigJson.messagingSenderId,
   appId: firebaseConfigJson.appId,
+  ...(firebaseConfigJson.measurementId ? { measurementId: firebaseConfigJson.measurementId } : {}),
 };
 
 let app: any;
