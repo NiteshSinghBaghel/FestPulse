@@ -1,7 +1,82 @@
 {
-  "events": [],
-  "tickets": [],
-  "accounts": [],
+  "events": [
+    {
+      "eventId": "evt_test_health_1",
+      "title": "Spring Cultural Odyssey 2026",
+      "category": "Cultural",
+      "collegeName": "IIT Delhi",
+      "startDate": "2026-11-20",
+      "endDate": "2026-11-22",
+      "price": 0,
+      "totalPasses": 500,
+      "bookedPasses": 0,
+      "description": "The largest inter-college festival celebration.",
+      "bannerUrl": "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?auto=format&fit=crop&q=80&w=800",
+      "status": "published",
+      "hostId": "usr_test_1"
+    }
+  ],
+  "tickets": [
+    {
+      "ticketId": "tkt_health_check_1",
+      "eventId": "evt_test_health_1",
+      "eventTitle": "Spring Cultural Odyssey 2026",
+      "userId": "usr_test_1",
+      "userName": "Eshu Singh",
+      "userEmail": "eshusingh62@gmail.com",
+      "qrCode": "PASS_VERIFIED_EVT_HEALTH_1",
+      "ticketType": "VIP",
+      "price": 0,
+      "purchaseDate": "2026-09-26T17:40:00.000Z",
+      "status": "valid",
+      "checkedIn": false,
+      "paymentMethod": "free"
+    }
+  ],
+  "accounts": [
+    {
+      "uid": "usr_test_1",
+      "name": "Eshu Singh",
+      "email": "eshusingh62@gmail.com",
+      "password": "password123",
+      "role": "user",
+      "college": "IIT Delhi",
+      "createdAt": "2026-09-26T17:14:00.000Z"
+    },
+    {
+      "uid": "g_muinhnsl_kodk",
+      "name": "Google User",
+      "email": "student_muinhnsk@festplus.com",
+      "role": "user",
+      "college": "College Student",
+      "phone": "",
+      "photoURL": "https://api.dicebear.com/7.x/bottts/svg?seed=Google%20User",
+      "authProvider": "google",
+      "createdAt": "2026-09-26T17:15:26.522Z"
+    },
+    {
+      "uid": "g_muinnkq8_ma1j",
+      "name": "Google User",
+      "email": "student_muinnkq8@festplus.com",
+      "role": "user",
+      "college": "College Student",
+      "phone": "",
+      "photoURL": "https://api.dicebear.com/7.x/bottts/svg?seed=Google%20User",
+      "authProvider": "google",
+      "createdAt": "2026-09-26T17:20:02.486Z"
+    },
+    {
+      "uid": "g_muino1fw_4o1t",
+      "name": "Google User",
+      "email": "student_muino1fw@festplus.com",
+      "role": "host",
+      "college": "Campus Event Council",
+      "phone": "",
+      "photoURL": "https://api.dicebear.com/7.x/bottts/svg?seed=Google%20User",
+      "authProvider": "google",
+      "createdAt": "2026-09-26T17:20:24.149Z"
+    }
+  ],
   "payouts": [],
   "supabaseConfig": {
     "url": "",

@@ -71,61 +71,72 @@ export class StorageService {
         }
       }
 
-      // One-time client wipe check for fresh start
-      if (typeof window !== 'undefined' && localStorage.getItem('festplus_clean_wipe_v1') !== 'true') {
-        localStorage.removeItem(STORAGE_KEYS.EVENTS);
-        localStorage.removeItem(STORAGE_KEYS.TICKETS);
-        localStorage.removeItem(STORAGE_KEYS.ACCOUNTS);
-        localStorage.removeItem(STORAGE_KEYS.PAYOUTS);
-        localStorage.removeItem(STORAGE_KEYS.BOOKMARKS);
-        localStorage.removeItem('festplus_auth_user_v1');
-        localStorage.removeItem('festplus_jwt_token');
-        localStorage.setItem('festplus_clean_wipe_v1', 'true');
-      }
-
-      // 3. Merge Events (if remote is empty, keep clean)
+      // 3. Merge Events (Two-way merge: Preserve local and remote)
       const localEvents = this.getEvents();
-      if (remoteEvents.length === 0) {
-        this.saveEvents([]);
-      } else {
-        const eventMap = new Map<string, CollegeEvent>();
-        localEvents.forEach(e => eventMap.set(e.eventId, e));
-        remoteEvents.forEach(e => eventMap.set(e.eventId, e));
-        this.saveEvents(Array.from(eventMap.values()));
+      const eventMap = new Map<string, CollegeEvent>();
+      localEvents.forEach(e => eventMap.set(e.eventId, e));
+      remoteEvents.forEach(e => eventMap.set(e.eventId, e));
+      const mergedEvents = Array.from(eventMap.values());
+      this.saveEvents(mergedEvents);
+
+      if (localEvents.length > 0) {
+        for (const evt of localEvents) {
+          if (!remoteEvents.some(r => r.eventId === evt.eventId)) {
+            fetch('/api/events', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(evt),
+            }).catch(() => {});
+          }
+        }
       }
 
-      // 4. Merge Tickets (if remote is empty, keep clean)
+      // 4. Merge Tickets (Two-way merge)
       const localTickets = this.getTickets();
-      if (remoteTickets.length === 0) {
-        this.saveTickets([]);
-      } else {
-        const ticketMap = new Map<string, Ticket>();
-        localTickets.forEach(t => ticketMap.set(t.ticketId, t));
-        remoteTickets.forEach(t => ticketMap.set(t.ticketId, t));
-        this.saveTickets(Array.from(ticketMap.values()));
+      const ticketMap = new Map<string, Ticket>();
+      localTickets.forEach(t => ticketMap.set(t.ticketId, t));
+      remoteTickets.forEach(t => ticketMap.set(t.ticketId, t));
+      this.saveTickets(Array.from(ticketMap.values()));
+
+      if (localTickets.length > 0) {
+        for (const tkt of localTickets) {
+          if (!remoteTickets.some(r => r.ticketId === tkt.ticketId)) {
+            fetch('/api/tickets', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(tkt),
+            }).catch(() => {});
+          }
+        }
       }
 
-      // 5. Merge Accounts (if remote is empty, keep clean)
+      // 5. Merge Accounts (CRITICAL: Never delete local accounts; two-way sync)
       const localAccounts = this.getRegisteredAccounts();
-      if (remoteAccounts.length === 0) {
-        this.saveRegisteredAccounts([]);
-      } else {
-        const accountMap = new Map<string, RegisteredAccount>();
-        localAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
-        remoteAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
-        this.saveRegisteredAccounts(Array.from(accountMap.values()));
+      const accountMap = new Map<string, RegisteredAccount>();
+      localAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
+      remoteAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
+      const mergedAccounts = Array.from(accountMap.values());
+      this.saveRegisteredAccounts(mergedAccounts);
+
+      // Upload any locally registered accounts to server if not present
+      if (localAccounts.length > 0) {
+        for (const acc of localAccounts) {
+          if (!remoteAccounts.some(r => r.email.toLowerCase().trim() === acc.email.toLowerCase().trim())) {
+            fetch('/api/accounts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(acc),
+            }).catch(() => {});
+          }
+        }
       }
 
       // 6. Merge Payouts
-      if (remotePayouts.length === 0) {
-        this.savePayouts([]);
-      } else {
-        const localPayouts = this.getPayouts();
-        const payoutMap = new Map<string, PayoutRecord>();
-        localPayouts.forEach(p => payoutMap.set(p.payoutId, p));
-        remotePayouts.forEach(p => payoutMap.set(p.payoutId, p));
-        this.savePayouts(Array.from(payoutMap.values()));
-      }
+      const localPayouts = this.getPayouts();
+      const payoutMap = new Map<string, PayoutRecord>();
+      localPayouts.forEach(p => payoutMap.set(p.payoutId, p));
+      remotePayouts.forEach(p => payoutMap.set(p.payoutId, p));
+      this.savePayouts(Array.from(payoutMap.values()));
 
       // 7. Two-way sync with Firestore: download from Firestore or upload local data if Firestore is empty
       try {
@@ -637,6 +648,32 @@ export class StorageService {
     return accounts.find(a => a.email.toLowerCase().trim() === email.toLowerCase().trim());
   }
 
+  static async findAccountByEmailAsync(email: string): Promise<RegisteredAccount | undefined> {
+    const cleanEmail = email.toLowerCase().trim();
+    // 1. Check local storage
+    const local = this.findAccountByEmail(cleanEmail);
+    if (local) return local;
+
+    // 2. Check server database directly
+    try {
+      const res = await fetch('/api/accounts');
+      if (res.ok) {
+        const accounts: RegisteredAccount[] = await res.json();
+        if (Array.isArray(accounts)) {
+          const found = accounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
+          if (found) {
+            this.saveAccount(found);
+            return found;
+          }
+        }
+      }
+    } catch {
+      // safe fallback
+    }
+
+    return undefined;
+  }
+
   static saveAccount(account: RegisteredAccount): void {
     const accounts = this.getRegisteredAccounts();
     const idx = accounts.findIndex(a => a.email.toLowerCase().trim() === account.email.toLowerCase().trim());
@@ -656,6 +693,19 @@ export class StorageService {
 
     // 2. Sync to Firestore
     FirebaseDbService.saveAccount(account).catch(e => console.warn('Cloud saveAccount error:', e));
+  }
+
+  static async saveAccountAsync(account: RegisteredAccount): Promise<void> {
+    this.saveAccount(account);
+    try {
+      await fetch('/api/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(account),
+      });
+    } catch (e) {
+      console.warn('API saveAccountAsync warning:', e);
+    }
   }
 
   // ================= PAYOUTS / REVENUE TRANSFERS =================

@@ -132,8 +132,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      const accounts = StorageService.getRegisteredAccounts();
-      const existing = accounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
+      const existing = await StorageService.findAccountByEmailAsync(cleanEmail);
       if (existing) {
         return { 
           success: false, 
@@ -159,8 +158,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createdAt: new Date().toISOString(),
       };
 
-      // 1. Save in local & cloud free database
-      StorageService.saveAccount(newAccount);
+      // 1. Save in local & cloud free database (awaited)
+      await StorageService.saveAccountAsync(newAccount);
 
       // 2. Mint HMAC-SHA256 JWT session token
       const token = await JwtService.createToken({
@@ -217,8 +216,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      const accounts = StorageService.getRegisteredAccounts();
-      const account = accounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
+      // Find account both in local cache AND persistent server database
+      const account = await StorageService.findAccountByEmailAsync(cleanEmail);
 
       if (!account) {
         return {
