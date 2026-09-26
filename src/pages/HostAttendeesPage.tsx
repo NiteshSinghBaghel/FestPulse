@@ -35,7 +35,7 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
   // Helpline edit state for this event
   const [isEditingHelpline, setIsEditingHelpline] = useState(false);
   const [helplineInput, setHelplineInput] = useState(
-    selectedEvent?.hostPhone || '+91 98112 34567'
+    selectedEvent?.hostPhone || currentUser?.phone || ''
   );
 
   const relevantTickets = selectedEvent

@@ -232,7 +232,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
     if (!token.trim()) return;
     setIsProcessing(true);
 
-    const hostId = currentUser?.uid || 'host-council-101';
+    const hostId = currentUser?.uid || '';
     const result = StorageService.verifyAndProcessScan(token.trim(), hostId);
     setIsProcessing(false);
 

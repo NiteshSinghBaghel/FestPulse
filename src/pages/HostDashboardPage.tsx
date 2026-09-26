@@ -78,7 +78,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
   const totalCheckedIn = hostTickets.filter(t => t.entryStatus === 'entered').length;
 
   // Payouts & Revenue Transfers
-  const hostPayouts = StorageService.getPayouts(currentUser?.uid === 'host-council-101' ? undefined : currentUser?.uid);
+  const hostPayouts = StorageService.getPayouts(currentUser?.uid);
   const totalTransferred = hostPayouts.reduce((acc, p) => acc + p.amount, 0);
   const availableBalance = Math.max(0, totalRevenue - totalTransferred);
 
@@ -512,7 +512,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
               {/* Action Buttons */}
               <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto justify-start sm:justify-end border-t sm:border-t-0 border-slate-100 pt-2.5 sm:pt-0">
                 {/* USER MANDATE: Only the host who created the event can edit it */}
-                {((evt.hostId === currentUser?.uid) || (evt.hostId === 'host-council-101' && currentUser?.uid === 'host-council-101')) ? (
+                {(evt.hostId === currentUser?.uid) ? (
                   <button
                     onClick={() => setEditingEvent(evt)}
                     className="p-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-semibold flex items-center gap-1 transition"

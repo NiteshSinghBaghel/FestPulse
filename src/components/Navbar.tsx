@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { FestLogo } from './FestLogo';
 import { 
   ShieldCheck, 
   UserCheck, 
@@ -10,7 +11,6 @@ import {
   CalendarDays, 
   Users, 
   BarChart3, 
-  QrCode,
   LogOut,
   ChevronDown
 } from 'lucide-react';
@@ -60,24 +60,13 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Left: Brand Logo & Title */}
         <div 
           onClick={() => onNavigate && onNavigate(role === 'host' ? 'host-dashboard' : 'home')}
-          className="flex items-center gap-3 cursor-pointer group select-none shrink-0"
+          className="cursor-pointer group select-none shrink-0"
         >
-          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-700 flex items-center justify-center shadow-sm text-white font-black text-xl tracking-tight transition-transform group-hover:scale-105">
-            CP
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="font-black text-lg tracking-tight text-slate-900">
-                CampusPass
-              </span>
-              <span className="hidden sm:inline-block text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
-                Fest '26
-              </span>
-            </div>
-            <p className="text-[11px] text-slate-500 font-medium hidden md:block">
-              {role === 'host' ? '⚡ Council & Organizer Portal' : '🎓 Discover Inter-College Passes'}
-            </p>
-          </div>
+          <FestLogo 
+            size="md" 
+            variant="dark"
+            subtitleText={role === 'host' ? '⚡ Council & Organizer Portal' : '🎓 Inter-College Events & Passes'}
+          />
         </div>
 
         {/* Center: Desktop Website Navigation Links (Visible on Tablet/Desktop md+) */}
@@ -168,25 +157,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right: Actions, Host Tools, Search & Profile */}
         <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-          {/* Host Quick Actions in Navbar */}
-          {role === 'host' && onOpenScanner && (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={onOpenScanner}
-                className="relative p-2.5 sm:px-3 sm:py-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 text-slate-950 font-black text-xs flex items-center gap-2 shadow-xs transition active:scale-95 group overflow-hidden"
-                title="Scan passes with Gate QR Scanner"
-              >
-                {/* Subtle animated scan sweep line */}
-                <span className="absolute inset-x-0 h-0.5 bg-white/70 shadow-[0_0_8px_white] animate-[pulse_1.5s_cubic-bezier(0.4,0,0.6,1)_infinite] top-1"></span>
-                <div className="relative">
-                  <QrCode className="w-4 h-4 animate-bounce group-hover:scale-110 transition duration-300" />
-                </div>
-                <span className="hidden sm:inline font-black tracking-tight">Gate Scan</span>
-              </button>
-            </div>
-          )}
-
           {/* Role Indicator Badge */}
           <div
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border shadow-2xs select-none ${

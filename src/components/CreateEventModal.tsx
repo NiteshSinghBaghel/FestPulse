@@ -33,7 +33,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onCl
   const [imageUrl, setImageUrl] = useState(PRESET_IMAGES[0].url);
   const [rules, setRules] = useState('College ID required\nNo late entries past 11:30 AM');
   const [amenities, setAmenities] = useState('Free Refreshments, Wi-Fi Access, Digital Certificate');
-  const [hostPhone, setHostPhone] = useState(currentUser?.phone || '+91 98112 34567');
+  const [hostPhone, setHostPhone] = useState(currentUser?.phone || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -83,8 +83,8 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onCl
     if (!validateForm()) return;
 
     const newEvt = StorageService.createEvent({
-      hostId: currentUser?.uid || 'host-council-101',
-      hostName: currentUser?.name || 'Campus Organizing Committee',
+      hostId: currentUser?.uid || `host-${Date.now().toString(36)}`,
+      hostName: currentUser?.name || 'Event Host',
       title: title.trim(),
       description: description.trim(),
       imageUrl: imageUrl || PRESET_IMAGES[0].url,
@@ -98,7 +98,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onCl
       capacity: Number(capacity),
       status: publishStatus,
       category,
-      hostPhone: hostPhone.trim() || '+91 98112 34567',
+      hostPhone: hostPhone.trim() || currentUser?.phone || '',
       rules: rules.split('\n').filter(r => r.trim().length > 0),
       amenities: amenities.split(',').map(a => a.trim()).filter(a => a.length > 0)
     });

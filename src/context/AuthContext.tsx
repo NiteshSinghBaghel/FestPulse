@@ -3,13 +3,25 @@ import { UserProfile, UserRole, RegisteredAccount } from '../types';
 import { StorageService } from '../services/storageService';
 import { JwtService } from '../services/jwtService';
 import { FirebaseDbService } from '../services/firebaseDbService';
-import { signInWithGooglePopup as fbSignInWithGoogle, firebaseLogout } from '../services/firebase';
+import { 
+  auth, 
+  onAuthStateChanged, 
+  firebaseLoginWithEmail, 
+  firebaseRegisterWithEmail, 
+  signInWithGooglePopup as fbSignInWithGoogle, 
+  firebaseLogout,
+  firebaseSendPasswordReset,
+  firebaseUpdateUserPassword,
+  getFirebaseErrorMessage,
+  FirebaseUser
+} from '../services/firebase';
 
 interface AuthContextType {
   currentUser: UserProfile | null;
   role: UserRole;
   jwtToken: string | null;
   isTokenVerified: boolean;
+  isLoadingAuth: boolean;
   login: (email: string, password: string, role: UserRole) => Promise<{ success: boolean; error?: string }>;
   register: (name: string, email: string, password: string, role: UserRole, college?: string, phone?: string) => Promise<{ success: boolean; error?: string }>;
   loginWithGoogle: (
@@ -29,51 +41,130 @@ interface AuthContextType {
   logout: () => void;
   updateProfile: (data: Partial<UserProfile>) => Promise<{ success: boolean; error?: string }>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
-  resetPassword: (newPassword: string) => Promise<{ success: boolean; error?: string }>;
+  resetPassword: (email: string) => Promise<{ success: boolean; error?: string }>;
 }
 
-const AUTH_STORAGE_KEY = 'campuspass_auth_user_v2';
+const AUTH_STORAGE_KEY = 'festplus_auth_user_v1';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
-    // Clear any obsolete v1 demo session
-    if (localStorage.getItem('campuspass_auth_user_v1')) {
+    // Clear any obsolete demo sessions
+    try {
       localStorage.removeItem('campuspass_auth_user_v1');
-    }
-    const saved = localStorage.getItem(AUTH_STORAGE_KEY);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return null;
+      localStorage.removeItem('campuspass_auth_user_v2');
+      localStorage.removeItem('campuspass_demo_user');
+      
+      const saved = localStorage.getItem(AUTH_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Exclude any obsolete demo emails
+        if (parsed?.email?.includes('@campus.edu')) {
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+          return null;
+        }
+        return parsed;
       }
+    } catch {
+      return null;
     }
     return null;
   });
 
   const [jwtToken, setJwtToken] = useState<string | null>(() => {
-    return localStorage.getItem('campuspass_jwt_token');
+    return localStorage.getItem('festplus_jwt_token') || localStorage.getItem('campuspass_jwt_token');
   });
 
   const [isTokenVerified, setIsTokenVerified] = useState<boolean>(false);
+  const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(true);
 
-  // Validate stored JWT on initial mount
+  // Synchronize with real Firebase Authentication state
+  useEffect(() => {
+    if (!auth) {
+      setIsLoadingAuth(false);
+      return;
+    }
+
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser: FirebaseUser | null) => {
+      try {
+        if (fbUser) {
+          // Attempt to load existing user profile from Firestore
+          let profile = await FirebaseDbService.getUserProfile(fbUser.uid);
+
+          if (!profile) {
+            // First time login with Firebase or Google SSO: Create fresh commercial user profile
+            const cleanName = fbUser.displayName || fbUser.email?.split('@')[0] || 'User';
+            const userEmail = fbUser.email || '';
+            const existingRole = currentUser?.role || 'user';
+
+            profile = {
+              uid: fbUser.uid,
+              name: cleanName,
+              email: userEmail,
+              role: existingRole,
+              college: currentUser?.college || (existingRole === 'host' ? 'Event Organizing Council' : 'College Student'),
+              phone: fbUser.phoneNumber || currentUser?.phone || '',
+              photoURL: fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
+              authProvider: fbUser.providerData?.[0]?.providerId === 'google.com' ? 'google' : 'email',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+
+            await FirebaseDbService.saveUserProfile(profile);
+          }
+
+          // Mint cryptographically signed HMAC-SHA256 JWT token for this authenticated Firebase session
+          const token = await JwtService.createToken({
+            uid: profile.uid,
+            email: profile.email,
+            name: profile.name,
+            role: profile.role,
+          });
+
+          JwtService.saveToken(token);
+          setJwtToken(token);
+          setIsTokenVerified(true);
+
+          const updatedProfile: UserProfile = {
+            ...profile,
+            token,
+            updatedAt: new Date().toISOString(),
+          };
+
+          setCurrentUser(updatedProfile);
+          localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updatedProfile));
+        } else {
+          // If no active Firebase user and no saved valid offline user, clear state
+          if (!currentUser) {
+            setJwtToken(null);
+            setIsTokenVerified(false);
+            localStorage.removeItem(AUTH_STORAGE_KEY);
+          }
+        }
+      } catch (err) {
+        console.warn('Firebase onAuthStateChanged error:', err);
+      } finally {
+        setIsLoadingAuth(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Validate stored JWT token on startup
   useEffect(() => {
     const verifyInitialSession = async () => {
       const stored = await JwtService.getVerifiedStoredToken();
       if (stored) {
         setJwtToken(stored.token);
         setIsTokenVerified(true);
-        // Ensure currentUser is updated with token
         if (currentUser && !currentUser.token) {
           const updated = { ...currentUser, token: stored.token };
           setCurrentUser(updated);
           localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updated));
         }
       } else if (currentUser) {
-        // If JWT token is missing or expired, generate a fresh valid token for current session
         const freshToken = await JwtService.createToken({
           uid: currentUser.uid,
           email: currentUser.email,
@@ -86,8 +177,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const updated = { ...currentUser, token: freshToken };
         setCurrentUser(updated);
         localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updated));
-      } else {
-        setIsTokenVerified(false);
       }
     };
 
@@ -105,79 +194,79 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, [currentUser]);
 
-  // Secure Email & Password Login with Cryptographic Salted Hash & JWT Issuance
-  const login = async (email: string, password: string, selectedRole: UserRole): Promise<{ success: boolean; error?: string }> => {
+  // =========================================================================
+  // 🔐 REAL FIREBASE AUTHENTICATION: LOGIN
+  // =========================================================================
+  const login = async (
+    email: string, 
+    password: string, 
+    selectedRole: UserRole
+  ): Promise<{ success: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
-    const account = StorageService.findAccountByEmail(cleanEmail);
 
-    if (!account) {
-      return {
-        success: false,
-        error: 'No account found with this email. Please switch to "Create Account" tab to register.'
+    try {
+      // 1. Authenticate with real Firebase Authentication
+      const userCredential = await firebaseLoginWithEmail(cleanEmail, password);
+      const fbUser = userCredential.user;
+
+      // 2. Load or sync user profile from Cloud Firestore
+      let profile = await FirebaseDbService.getUserProfile(fbUser.uid);
+      const displayName = fbUser.displayName || profile?.name || cleanEmail.split('@')[0];
+
+      // 3. Issue HMAC-SHA256 JWT Token
+      const token = await JwtService.createToken({
+        uid: fbUser.uid,
+        email: cleanEmail,
+        name: displayName,
+        role: selectedRole,
+      });
+
+      JwtService.saveToken(token);
+      setJwtToken(token);
+      setIsTokenVerified(true);
+
+      const userProfile: UserProfile = {
+        uid: fbUser.uid,
+        name: displayName,
+        email: cleanEmail,
+        role: selectedRole, // Ensure active role matches what user chose
+        college: profile?.college || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
+        phone: profile?.phone || '',
+        photoURL: fbUser.photoURL || profile?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(displayName)}`,
+        authProvider: 'email',
+        token,
+        createdAt: profile?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
+
+      // 4. Save to Firestore
+      await FirebaseDbService.saveUserProfile(userProfile);
+
+      // 5. Update local cache
+      StorageService.saveAccount({
+        uid: userProfile.uid,
+        name: userProfile.name,
+        email: userProfile.email,
+        role: selectedRole,
+        college: userProfile.college,
+        phone: userProfile.phone,
+        photoURL: userProfile.photoURL,
+        authProvider: 'email',
+        createdAt: userProfile.createdAt,
+      });
+
+      setCurrentUser(userProfile);
+      return { success: true };
+    } catch (err: any) {
+      console.warn('Firebase login attempt:', err);
+      const friendlyError = getFirebaseErrorMessage(err);
+      return { success: false, error: friendlyError };
     }
-
-    // Cryptographic Password Verification
-    const isPasswordValid = await JwtService.verifyPassword(
-      password,
-      account.passwordHash,
-      account.salt,
-      account.password
-    );
-
-    if (!isPasswordValid) {
-      return {
-        success: false,
-        error: 'Incorrect password. Cryptographic validation failed.'
-      };
-    }
-
-    // Auto-upgrade legacy account to salted SHA-256 hash if it didn't have one
-    if (!account.passwordHash || !account.salt) {
-      const { hash, salt } = await JwtService.hashPassword(password);
-      account.passwordHash = hash;
-      account.salt = salt;
-      delete account.password; // Remove plaintext password
-    }
-
-    // Issue Cryptographically Signed HMAC-SHA256 JWT Token
-    const token = await JwtService.createToken({
-      uid: account.uid,
-      email: account.email,
-      name: account.name,
-      role: selectedRole,
-    });
-
-    JwtService.saveToken(token);
-    setJwtToken(token);
-    setIsTokenVerified(true);
-
-    // Role is strictly locked to what was chosen at login
-    const updatedUser: UserProfile = {
-      uid: account.uid,
-      name: account.name,
-      email: account.email,
-      role: selectedRole,
-      college: account.college || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
-      phone: account.phone || '',
-      photoURL: account.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(account.name)}`,
-      authProvider: account.authProvider || 'email',
-      token,
-      createdAt: account.createdAt,
-      updatedAt: new Date().toISOString(),
-    };
-
-    // Update account with latest role and hash in storage
-    StorageService.saveAccount({
-      ...account,
-      role: selectedRole,
-    });
-
-    setCurrentUser(updatedUser);
-    return { success: true };
   };
 
-  // Secure Email & Password Registration with Cryptographic Salted Hash & JWT
+  // =========================================================================
+  // 🔐 REAL FIREBASE AUTHENTICATION: REGISTER
+  // =========================================================================
   const register = async (
     name: string, 
     email: string, 
@@ -190,74 +279,142 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanName = name.trim();
 
     if (!cleanName) {
-      return { success: false, error: 'Full name is required.' };
+      return { success: false, error: 'Please enter your full name.' };
     }
     if (!cleanEmail || !cleanEmail.includes('@')) {
-      return { success: false, error: 'Valid email address is required.' };
+      return { success: false, error: 'Please enter a valid email address.' };
     }
     if (!password || password.length < 6) {
       return { success: false, error: 'Password must be at least 6 characters.' };
     }
 
-    const existing = StorageService.findAccountByEmail(cleanEmail);
-    if (existing) {
-      return { 
-        success: false, 
-        error: 'An account with this email already exists. Please sign in instead.' 
+    try {
+      // 1. Create real account in Firebase Authentication
+      const userCredential = await firebaseRegisterWithEmail(cleanEmail, password, cleanName);
+      const fbUser = userCredential.user;
+
+      // 2. Issue HMAC-SHA256 JWT Token
+      const token = await JwtService.createToken({
+        uid: fbUser.uid,
+        email: cleanEmail,
+        name: cleanName,
+        role: selectedRole,
+      });
+
+      JwtService.saveToken(token);
+      setJwtToken(token);
+      setIsTokenVerified(true);
+
+      const userProfile: UserProfile = {
+        uid: fbUser.uid,
+        name: cleanName,
+        email: cleanEmail,
+        role: selectedRole,
+        college: college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
+        phone: phone?.trim() || '',
+        photoURL: fbUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
+        authProvider: 'email',
+        token,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
+
+      // 3. Persist to Firestore Cloud Database
+      await FirebaseDbService.saveUserProfile(userProfile);
+
+      // 4. Update local storage account
+      StorageService.saveAccount({
+        uid: userProfile.uid,
+        name: userProfile.name,
+        email: userProfile.email,
+        role: selectedRole,
+        college: userProfile.college,
+        phone: userProfile.phone,
+        photoURL: userProfile.photoURL,
+        authProvider: 'email',
+        createdAt: userProfile.createdAt,
+      });
+
+      setCurrentUser(userProfile);
+      return { success: true };
+    } catch (err: any) {
+      console.warn('Firebase registration error:', err);
+      const friendlyError = getFirebaseErrorMessage(err);
+      return { success: false, error: friendlyError };
     }
-
-    // Cryptographic Password Hashing with Salt
-    const { hash, salt } = await JwtService.hashPassword(password);
-
-    const uid = selectedRole === 'host' ? `host-${Date.now().toString(36)}` : `usr-${Date.now().toString(36)}`;
-    const newAccount: RegisteredAccount = {
-      uid,
-      name: cleanName,
-      email: cleanEmail,
-      passwordHash: hash,
-      salt,
-      role: selectedRole,
-      college: college?.trim() || (selectedRole === 'host' ? 'Campus Event Committee' : 'College Student'),
-      phone: phone?.trim() || '',
-      photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
-      authProvider: 'email',
-      createdAt: new Date().toISOString(),
-    };
-
-    StorageService.saveAccount(newAccount);
-
-    // Issue Cryptographically Signed HMAC-SHA256 JWT Token
-    const token = await JwtService.createToken({
-      uid: newAccount.uid,
-      email: newAccount.email,
-      name: newAccount.name,
-      role: selectedRole,
-    });
-
-    JwtService.saveToken(token);
-    setJwtToken(token);
-    setIsTokenVerified(true);
-
-    const userProfile: UserProfile = {
-      uid: newAccount.uid,
-      name: newAccount.name,
-      email: newAccount.email,
-      role: selectedRole,
-      college: newAccount.college,
-      phone: newAccount.phone,
-      photoURL: newAccount.photoURL,
-      authProvider: 'email',
-      token,
-      createdAt: newAccount.createdAt,
-      updatedAt: new Date().toISOString(),
-    };
-
-    setCurrentUser(userProfile);
-    return { success: true };
   };
 
-  // Google Sign-In & Registration with Real Firebase & Cryptographic JWT Issuance
+  // =========================================================================
+  // ⚡ REAL FIREBASE GOOGLE POPUP AUTHENTICATION
+  // =========================================================================
+  const signInWithGooglePopup = async (
+    selectedRole: UserRole,
+    college?: string,
+    phone?: string
+  ): Promise<{ success: boolean; isNewUser?: boolean; error?: string }> => {
+    try {
+      const result = await fbSignInWithGoogle();
+      const fbUser = result.user;
+      if (!fbUser.email) {
+        return { success: false, error: 'Google account did not provide a valid email.' };
+      }
+
+      const cleanEmail = fbUser.email.trim().toLowerCase();
+      const cleanName = fbUser.displayName || cleanEmail.split('@')[0];
+
+      // Check if existing profile in Firestore
+      let profile = await FirebaseDbService.getUserProfile(fbUser.uid);
+      const isNewUser = !profile;
+
+      const token = await JwtService.createToken({
+        uid: fbUser.uid,
+        email: cleanEmail,
+        name: cleanName,
+        role: selectedRole,
+      });
+
+      JwtService.saveToken(token);
+      setJwtToken(token);
+      setIsTokenVerified(true);
+
+      const userProfile: UserProfile = {
+        uid: fbUser.uid,
+        name: cleanName,
+        email: cleanEmail,
+        role: selectedRole,
+        college: profile?.college || college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
+        phone: profile?.phone || phone?.trim() || '',
+        photoURL: fbUser.photoURL || profile?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
+        authProvider: 'google',
+        token,
+        createdAt: profile?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await FirebaseDbService.saveUserProfile(userProfile);
+
+      StorageService.saveAccount({
+        uid: userProfile.uid,
+        name: userProfile.name,
+        email: userProfile.email,
+        role: selectedRole,
+        college: userProfile.college,
+        phone: userProfile.phone,
+        photoURL: userProfile.photoURL,
+        authProvider: 'google',
+        createdAt: userProfile.createdAt,
+      });
+
+      setCurrentUser(userProfile);
+      return { success: true, isNewUser };
+    } catch (err: any) {
+      console.warn('Firebase Google Auth error:', err);
+      const friendlyError = getFirebaseErrorMessage(err);
+      return { success: false, error: friendlyError };
+    }
+  };
+
+  // Google One-Tap / Identity Services token integration
   const loginWithGoogle = async (
     name: string, 
     email: string, 
@@ -269,285 +426,138 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<{ success: boolean; isNewUser?: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = name.trim();
+    const uid = providedUid || `g-${Date.now().toString(36)}`;
 
-    let account = StorageService.findAccountByEmail(cleanEmail);
-    const isNewUser = !account;
+    try {
+      let profile = await FirebaseDbService.getUserProfile(uid);
+      const isNewUser = !profile;
 
-    if (!account) {
-      const uid = providedUid || (selectedRole === 'host' ? `host-g-${Date.now().toString(36)}` : `usr-g-${Date.now().toString(36)}`);
-      account = {
+      const token = await JwtService.createToken({
         uid,
-        name: cleanName || (selectedRole === 'host' ? 'Campus Event Host' : 'Campus Student'),
+        email: cleanEmail,
+        name: cleanName,
+        role: selectedRole,
+      });
+
+      JwtService.saveToken(token);
+      setJwtToken(token);
+      setIsTokenVerified(true);
+
+      const userProfile: UserProfile = {
+        uid,
+        name: cleanName,
         email: cleanEmail,
         role: selectedRole,
-        college: college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
-        phone: phone?.trim() || '',
-        photoURL: photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
+        college: profile?.college || college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
+        phone: profile?.phone || phone?.trim() || '',
+        photoURL: photoURL || profile?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
         authProvider: 'google',
-        createdAt: new Date().toISOString(),
+        token,
+        createdAt: profile?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
-      StorageService.saveAccount(account);
-      // Persist to Cloud Firestore accounts collection
-      FirebaseDbService.saveAccount(account).catch(err => {
-        console.warn('Firestore user account cloud backup notice:', err);
-      });
-    } else {
-      account = {
-        ...account,
+
+      await FirebaseDbService.saveUserProfile(userProfile);
+
+      StorageService.saveAccount({
+        uid: userProfile.uid,
+        name: userProfile.name,
+        email: userProfile.email,
         role: selectedRole,
-        name: cleanName || account.name,
-        photoURL: photoURL || account.photoURL,
-        college: college?.trim() || account.college,
-        phone: phone?.trim() || account.phone,
+        college: userProfile.college,
+        phone: userProfile.phone,
+        photoURL: userProfile.photoURL,
         authProvider: 'google',
-      };
-      StorageService.saveAccount(account);
-      FirebaseDbService.saveAccount(account).catch(err => {
-        console.warn('Firestore user account cloud update notice:', err);
+        createdAt: userProfile.createdAt,
       });
-    }
 
-    // Issue Signed HMAC-SHA256 JWT Token
-    const token = await JwtService.createToken({
-      uid: account.uid,
-      email: account.email,
-      name: account.name,
-      role: selectedRole,
-    });
-
-    JwtService.saveToken(token);
-    setJwtToken(token);
-    setIsTokenVerified(true);
-
-    const userProfile: UserProfile = {
-      uid: account.uid,
-      name: account.name,
-      email: account.email,
-      role: selectedRole,
-      college: account.college || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
-      phone: account.phone || '',
-      photoURL: account.photoURL || photoURL,
-      authProvider: 'google',
-      token,
-      createdAt: account.createdAt,
-      updatedAt: new Date().toISOString(),
-    };
-
-    setCurrentUser(userProfile);
-    return { success: true, isNewUser };
-  };
-
-  // Real Google Sign-in Popup via Firebase Authentication
-  const signInWithGooglePopup = async (
-    selectedRole: UserRole,
-    college?: string,
-    phone?: string
-  ): Promise<{ success: boolean; isNewUser?: boolean; error?: string }> => {
-    try {
-      const result = await fbSignInWithGoogle();
-      const gUser = result.user;
-      if (!gUser.email) {
-        return { success: false, error: 'Google account did not return a valid email address.' };
-      }
-      return await loginWithGoogle(
-        gUser.displayName || gUser.email.split('@')[0],
-        gUser.email,
-        selectedRole,
-        gUser.photoURL || undefined,
-        gUser.uid,
-        college,
-        phone
-      );
+      setCurrentUser(userProfile);
+      return { success: true, isNewUser };
     } catch (err: any) {
-      console.warn('Firebase signInWithGooglePopup error:', err);
-      if (err?.code === 'auth/popup-closed-by-user') {
-        return { success: false, error: 'Google sign-in popup was closed before completing.' };
-      }
-      if (err?.code === 'auth/popup-blocked') {
-        return { success: false, error: 'Popup blocked by browser. Please allow popups or use Google One-Tap.' };
-      }
-      if (err?.code === 'auth/unauthorized-domain') {
-        return { 
-          success: false, 
-          error: `unauthorized-domain: ${window.location.hostname} is not yet added in Firebase Authorized Domains.` 
-        };
-      }
-      return { success: false, error: err?.message || 'Google authentication failed' };
+      console.warn('Google login processing error:', err);
+      return { success: false, error: err?.message || 'Failed to complete Google authentication.' };
     }
   };
 
+  // Sign out
   const logout = () => {
-    firebaseLogout().catch(e => console.warn('Firebase logout notice:', e));
+    firebaseLogout().catch(e => console.warn('Firebase logout warning:', e));
     JwtService.clearToken();
     setJwtToken(null);
     setIsTokenVerified(false);
     setCurrentUser(null);
+    localStorage.removeItem(AUTH_STORAGE_KEY);
   };
 
+  // Update profile
   const updateProfile = async (data: Partial<UserProfile>): Promise<{ success: boolean; error?: string }> => {
-    if (!currentUser) return { success: false, error: 'User is not logged in.' };
+    if (!currentUser) return { success: false, error: 'User is not signed in.' };
 
-    const oldEmail = currentUser.email.toLowerCase().trim();
-    const newEmail = data.email ? data.email.toLowerCase().trim() : oldEmail;
-
-    if (newEmail !== oldEmail) {
-      if (!newEmail.includes('@')) {
-        return { success: false, error: 'Please enter a valid email address.' };
-      }
-      const existing = StorageService.findAccountByEmail(newEmail);
-      if (existing && existing.uid !== currentUser.uid) {
-        return { success: false, error: 'This email is already associated with another account.' };
-      }
-    }
-
-    // Update in accounts database
-    const accounts = StorageService.getRegisteredAccounts();
-    const accountIdx = accounts.findIndex(a => a.email.toLowerCase().trim() === oldEmail || a.uid === currentUser.uid);
-
-    let updatedAccount: RegisteredAccount | null = null;
-    if (accountIdx >= 0) {
-      updatedAccount = {
-        ...accounts[accountIdx],
-        name: data.name !== undefined ? data.name : accounts[accountIdx].name,
-        email: newEmail,
-        college: data.college !== undefined ? data.college : accounts[accountIdx].college,
-        phone: data.phone !== undefined ? data.phone : accounts[accountIdx].phone,
-        photoURL: data.photoURL !== undefined ? data.photoURL : accounts[accountIdx].photoURL,
+    try {
+      const updatedUser: UserProfile = {
+        ...currentUser,
+        ...data,
+        updatedAt: new Date().toISOString(),
       };
-      accounts[accountIdx] = updatedAccount;
-      StorageService.saveRegisteredAccounts(accounts);
-      StorageService.saveAccount(updatedAccount);
+
+      await FirebaseDbService.saveUserProfile(updatedUser);
+
+      // Refresh JWT
+      const token = await JwtService.createToken({
+        uid: updatedUser.uid,
+        email: updatedUser.email,
+        name: updatedUser.name,
+        role: updatedUser.role,
+      });
+      JwtService.saveToken(token);
+      setJwtToken(token);
+      setIsTokenVerified(true);
+      updatedUser.token = token;
+
+      setCurrentUser(updatedUser);
+      localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updatedUser));
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Failed to update profile.' };
     }
-
-    // Refresh JWT session token with updated claims
-    const token = await JwtService.createToken({
-      uid: currentUser.uid,
-      email: newEmail,
-      name: data.name || currentUser.name,
-      role: currentUser.role,
-    });
-    JwtService.saveToken(token);
-    setJwtToken(token);
-    setIsTokenVerified(true);
-
-    const updatedUser: UserProfile = {
-      ...currentUser,
-      ...data,
-      email: newEmail,
-      token,
-      updatedAt: new Date().toISOString(),
-    };
-
-    setCurrentUser(updatedUser);
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updatedUser));
-
-    return { success: true };
   };
 
+  // Change password
   const changePassword = async (
-    currentPassword: string,
+    _currentPassword: string,
     newPassword: string
   ): Promise<{ success: boolean; error?: string }> => {
-    if (!currentUser) {
-      return { success: false, error: 'You must be logged in to change your password.' };
-    }
-    if (!newPassword || newPassword.trim().length < 6) {
+    if (!currentUser) return { success: false, error: 'User is not signed in.' };
+    if (!newPassword || newPassword.length < 6) {
       return { success: false, error: 'New password must be at least 6 characters long.' };
     }
 
-    const cleanEmail = currentUser.email.toLowerCase().trim();
-    let account = StorageService.findAccountByEmail(cleanEmail);
-
-    if (!account) {
-      account = {
-        uid: currentUser.uid,
-        name: currentUser.name,
-        email: cleanEmail,
-        role: currentUser.role,
-        authProvider: currentUser.authProvider || 'email',
-        createdAt: currentUser.createdAt || new Date().toISOString(),
-      };
+    try {
+      await firebaseUpdateUserPassword(newPassword);
+      return { success: true };
+    } catch (err: any) {
+      console.warn('Firebase update password error:', err);
+      const friendly = getFirebaseErrorMessage(err);
+      return { success: false, error: friendly };
     }
-
-    // Verify current password if account already had a password set
-    if (account.password || account.passwordHash) {
-      const isCurrentValid = await JwtService.verifyPassword(
-        currentPassword,
-        account.passwordHash,
-        account.salt,
-        account.password
-      );
-      if (!isCurrentValid) {
-        return { success: false, error: 'Current password is incorrect. Please verify and try again.' };
-      }
-    }
-
-    // Compute cryptographic salted SHA-256 hash
-    const { hash, salt } = await JwtService.hashPassword(newPassword.trim());
-    account.passwordHash = hash;
-    account.salt = salt;
-    delete account.password; // Remove legacy plaintext password
-
-    StorageService.saveAccount(account);
-
-    // Refresh JWT session token
-    const token = await JwtService.createToken({
-      uid: account.uid,
-      email: account.email,
-      name: account.name,
-      role: currentUser.role,
-    });
-    JwtService.saveToken(token);
-    setJwtToken(token);
-    setIsTokenVerified(true);
-
-    return { success: true };
   };
 
-  const resetPassword = async (
-    newPassword: string
-  ): Promise<{ success: boolean; error?: string }> => {
-    if (!currentUser) {
-      return { success: false, error: 'You must be logged in to reset your password.' };
-    }
-    if (!newPassword || newPassword.trim().length < 6) {
-      return { success: false, error: 'New password must be at least 6 characters long.' };
+  // Reset password / send recovery email
+  const resetPassword = async (email: string): Promise<{ success: boolean; error?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return { success: false, error: 'Please enter a valid email address.' };
     }
 
-    const cleanEmail = currentUser.email.toLowerCase().trim();
-    let account = StorageService.findAccountByEmail(cleanEmail);
-
-    if (!account) {
-      account = {
-        uid: currentUser.uid,
-        name: currentUser.name,
-        email: cleanEmail,
-        role: currentUser.role,
-        authProvider: currentUser.authProvider || 'email',
-        createdAt: currentUser.createdAt || new Date().toISOString(),
-      };
+    try {
+      await firebaseSendPasswordReset(cleanEmail);
+      return { success: true };
+    } catch (err: any) {
+      console.warn('Firebase reset password error:', err);
+      const friendly = getFirebaseErrorMessage(err);
+      return { success: false, error: friendly };
     }
-
-    // Compute cryptographic salted SHA-256 hash
-    const { hash, salt } = await JwtService.hashPassword(newPassword.trim());
-    account.passwordHash = hash;
-    account.salt = salt;
-    delete account.password;
-
-    StorageService.saveAccount(account);
-
-    // Refresh JWT session token
-    const token = await JwtService.createToken({
-      uid: account.uid,
-      email: account.email,
-      name: account.name,
-      role: currentUser.role,
-    });
-    JwtService.saveToken(token);
-    setJwtToken(token);
-    setIsTokenVerified(true);
-
-    return { success: true };
   };
 
   return (
@@ -557,6 +567,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         role: currentUser?.role || 'user',
         jwtToken,
         isTokenVerified,
+        isLoadingAuth,
         login,
         loginWithGoogle,
         signInWithGooglePopup,

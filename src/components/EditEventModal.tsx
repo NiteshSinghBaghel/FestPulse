@@ -62,10 +62,7 @@ export const EditEventModal: React.FC<EditEventModalProps> = ({
 
   // USER MANDATE: "and only wahi host change kar sakte hai event jisne create kiya hai event ko"
   const isCreator = Boolean(
-    event && (
-      currentUser?.uid === event.hostId ||
-      (event.hostId === 'host-council-101' && currentUser?.uid === 'host-council-101')
-    )
+    event && currentUser?.uid === event.hostId
   );
 
   useEffect(() => {

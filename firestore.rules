@@ -1,51 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Helper functions
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-
-    // Users Collection
-    match /users/{userId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // Accounts Collection
-    match /accounts/{accountId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // Events Collection
-    match /events/{eventId} {
-      // Anyone can browse events
-      allow read: if true;
-      // Anyone authenticated or public in demo can create and update events
-      allow write: if true;
-    }
-
-    // Tickets Collection
-    match /tickets/{ticketId} {
-      // Allow reading tickets for validation and passes
-      allow read: if true;
-      // Allow minting tickets upon pass booking and status updates upon gate check-in
-      allow write: if true;
-    }
-
-    // Payments Collection
-    match /payments/{paymentId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // Payouts Collection
-    match /payouts/{payoutId} {
-      allow read: if true;
-      allow write: if true;
+    match /{document=**} {
+      allow read, write: if true;
     }
   }
 }
-

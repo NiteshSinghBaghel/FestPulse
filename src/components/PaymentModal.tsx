@@ -194,10 +194,16 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
       setStep('processing');
       setErrorMessage('');
 
-      // Step 1: Validate stock atomically and generate order
-      const order = await PaymentService.createPaymentOrder(event.eventId);
+      // Step 1: Validate stock atomically and generate live Razorpay order
+      const order = await PaymentService.createPaymentOrder(event.eventId, {
+        amountInRupees: totalAmount,
+        studentName: fullName.trim(),
+        studentEmail: email.trim(),
+        studentPhone: phone.trim(),
+        quantity: ticketQuantity,
+      });
 
-      // Step 2: Directly open the Razorpay Standard Payment Gateway
+      // Step 2: Directly open the Razorpay Standard Live Payment Gateway
       await PaymentService.openRazorpayCheckout({
         amountInRupees: totalAmount,
         eventName: event.title,
@@ -206,6 +212,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
         studentEmail: email.trim(),
         studentPhone: phone.trim(),
         quantity: ticketQuantity,
+        orderId: order.orderId,
         onSuccess: async (paymentId: string, orderId?: string, signature?: string) => {
           try {
             // Step 3: Payment received and confirmed by gateway -> generate pass immediately!
@@ -613,7 +620,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
 
               <div className="flex justify-between items-start mb-3 border-b border-white/10 pb-3">
                 <div>
-                  <span className="text-[10px] text-indigo-300 uppercase tracking-widest font-black block">CAMPUSPASS ENTRY PASS</span>
+                  <span className="text-[10px] text-indigo-300 uppercase tracking-widest font-black block">FEST+ OFFICIAL ENTRY PASS</span>
                   <h4 className="font-black text-base text-white line-clamp-1">{generatedTicket.eventTitle}</h4>
                 </div>
                 <div className="text-right">

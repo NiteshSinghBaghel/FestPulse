@@ -1,4 +1,4 @@
-# CampusPass — College Event & Ticketing Platform
+# Fest-Plus (Fest+) — College Event & Ticketing Platform
 
 A production-style mobile-first college event discovery and ticketing platform built with React, Vite, TypeScript, Tailwind CSS, Lucide icons, Canvas Confetti, and QR code token verification.
 

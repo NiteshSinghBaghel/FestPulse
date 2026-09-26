@@ -1,5 +1,6 @@
 import { CollegeEvent, Ticket, UserProfile, PaymentRecord, ScannerScanResult, PayoutRecord, RegisteredAccount } from '../types';
 import { FirebaseDbService } from './firebaseDbService';
+import { SupabaseService } from './supabaseService';
 
 const STORAGE_KEYS = {
   EVENTS: 'campuspass_events_v1',
@@ -12,70 +13,152 @@ const STORAGE_KEYS = {
   ACCOUNTS: 'campuspass_accounts_db_v1',
 };
 
-// No dummy events: Clean slate for user and host created events
+// Clean slate: events are created by users and hosts
 export const INITIAL_EVENTS: CollegeEvent[] = [];
 
 export class StorageService {
+  private static isSyncing = false;
+
   /**
-   * Synchronizes data from cloud Firestore database into local cache.
-   * Merges remote items so offline/local changes are preserved.
+   * Synchronizes data from Cloud Server Database and Supabase/Firestore into local cache.
+   * Ensures multi-device real-time consistency.
    */
-  static async syncFromFirestore(): Promise<{ eventsCount: number; ticketsCount: number }> {
+  static async syncFromCloud(): Promise<{ eventsCount: number; ticketsCount: number }> {
+    if (this.isSyncing) {
+      return { eventsCount: this.getEvents().length, ticketsCount: this.getTickets().length };
+    }
+    this.isSyncing = true;
+
     try {
-      // 1. Sync Events
-      const remoteEvents = await FirebaseDbService.getEvents();
-      if (remoteEvents.length > 0) {
-        const localEvents = this.getEvents();
-        const eventMap = new Map<string, CollegeEvent>();
-        localEvents.forEach(e => eventMap.set(e.eventId, e));
-        remoteEvents.forEach(e => eventMap.set(e.eventId, e));
-        const mergedEvents = Array.from(eventMap.values());
-        this.saveEvents(mergedEvents);
-      } else {
-        // If Firestore is empty but we have local events, seed them into Firestore
-        const localEvents = this.getEvents();
-        if (localEvents.length > 0) {
-          localEvents.forEach(e => FirebaseDbService.saveEvent(e));
+      // 1. Fetch from Cloud Server Database (/api/sync)
+      let remoteEvents: CollegeEvent[] = [];
+      let remoteTickets: Ticket[] = [];
+      let remoteAccounts: RegisteredAccount[] = [];
+      let remotePayouts: PayoutRecord[] = [];
+
+      try {
+        const res = await fetch('/api/sync');
+        if (res.ok) {
+          const syncData = await res.json();
+          remoteEvents = Array.isArray(syncData.events) ? syncData.events : [];
+          remoteTickets = Array.isArray(syncData.tickets) ? syncData.tickets : [];
+          remoteAccounts = Array.isArray(syncData.accounts) ? syncData.accounts : [];
+          remotePayouts = Array.isArray(syncData.payouts) ? syncData.payouts : [];
+        }
+      } catch (err) {
+        console.warn('[Sync] Cloud server API sync warning:', err);
+      }
+
+      // 2. Fetch from Supabase if connected
+      if (SupabaseService.isConnected()) {
+        try {
+          const supaEvents = await SupabaseService.fetchEvents();
+          if (supaEvents.length > 0) {
+            const map = new Map<string, CollegeEvent>();
+            remoteEvents.forEach(e => map.set(e.eventId, e));
+            supaEvents.forEach(e => map.set(e.eventId, e));
+            remoteEvents = Array.from(map.values());
+          }
+          const supaTickets = await SupabaseService.fetchTickets();
+          if (supaTickets.length > 0) {
+            const map = new Map<string, Ticket>();
+            remoteTickets.forEach(t => map.set(t.ticketId, t));
+            supaTickets.forEach(t => map.set(t.ticketId, t));
+            remoteTickets = Array.from(map.values());
+          }
+        } catch (err) {
+          console.warn('[Sync] Supabase sync warning:', err);
         }
       }
 
-      // 2. Sync Tickets
-      const remoteTickets = await FirebaseDbService.getTickets();
-      if (remoteTickets.length > 0) {
-        const localTickets = this.getTickets();
-        const ticketMap = new Map<string, Ticket>();
-        localTickets.forEach(t => ticketMap.set(t.ticketId, t));
-        remoteTickets.forEach(t => ticketMap.set(t.ticketId, t));
-        const mergedTickets = Array.from(ticketMap.values());
-        this.saveTickets(mergedTickets);
-      } else {
-        const localTickets = this.getTickets();
-        if (localTickets.length > 0) {
-          localTickets.forEach(t => FirebaseDbService.saveTicket(t));
+      // 3. Merge Events
+      const localEvents = this.getEvents();
+      const eventMap = new Map<string, CollegeEvent>();
+      // First populate with local
+      localEvents.forEach(e => eventMap.set(e.eventId, e));
+      // Overwrite/enrich with remote
+      remoteEvents.forEach(e => eventMap.set(e.eventId, e));
+      const mergedEvents = Array.from(eventMap.values());
+      this.saveEvents(mergedEvents);
+
+      // If local had events that are not yet on the cloud server, upload them
+      if (localEvents.length > remoteEvents.length) {
+        for (const evt of localEvents) {
+          if (!remoteEvents.some(r => r.eventId === evt.eventId)) {
+            fetch('/api/events', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(evt),
+            }).catch(() => {});
+          }
         }
       }
 
-      // 3. Sync Accounts
-      const remoteAccounts = await FirebaseDbService.getAccounts();
-      if (remoteAccounts.length > 0) {
-        const localAccounts = this.getRegisteredAccounts();
-        const accountMap = new Map<string, RegisteredAccount>();
-        localAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
-        remoteAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
-        this.saveRegisteredAccounts(Array.from(accountMap.values()));
+      // 4. Merge Tickets
+      const localTickets = this.getTickets();
+      const ticketMap = new Map<string, Ticket>();
+      localTickets.forEach(t => ticketMap.set(t.ticketId, t));
+      remoteTickets.forEach(t => ticketMap.set(t.ticketId, t));
+      const mergedTickets = Array.from(ticketMap.values());
+      this.saveTickets(mergedTickets);
+
+      if (localTickets.length > remoteTickets.length) {
+        for (const tkt of localTickets) {
+          if (!remoteTickets.some(r => r.ticketId === tkt.ticketId)) {
+            fetch('/api/tickets', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(tkt),
+            }).catch(() => {});
+          }
+        }
       }
+
+      // 5. Merge Accounts
+      const localAccounts = this.getRegisteredAccounts();
+      const accountMap = new Map<string, RegisteredAccount>();
+      localAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
+      remoteAccounts.forEach(a => accountMap.set(a.email.toLowerCase().trim(), a));
+      this.saveRegisteredAccounts(Array.from(accountMap.values()));
+
+      // 6. Merge Payouts
+      if (remotePayouts.length > 0) {
+        const localPayouts = this.getPayouts();
+        const payoutMap = new Map<string, PayoutRecord>();
+        localPayouts.forEach(p => payoutMap.set(p.payoutId, p));
+        remotePayouts.forEach(p => payoutMap.set(p.payoutId, p));
+        this.savePayouts(Array.from(payoutMap.values()));
+      }
+
+      // 7. Background sync with Firestore if initialized
+      FirebaseDbService.getEvents().then(fbEvents => {
+        if (fbEvents && fbEvents.length > 0) {
+          const curEvents = this.getEvents();
+          const emap = new Map<string, CollegeEvent>();
+          curEvents.forEach(e => emap.set(e.eventId, e));
+          fbEvents.forEach(e => emap.set(e.eventId, e));
+          this.saveEvents(Array.from(emap.values()));
+        }
+      }).catch(() => {});
 
       return {
         eventsCount: this.getEvents().length,
         ticketsCount: this.getTickets().length,
       };
     } catch (err) {
-      console.warn('StorageService syncFromFirestore warning:', err);
+      console.warn('StorageService syncFromCloud error:', err);
       return {
         eventsCount: this.getEvents().length,
         ticketsCount: this.getTickets().length,
       };
+    } finally {
+      this.isSyncing = false;
     }
+  }
+
+  /** Backward-compatible alias for existing call sites */
+  static async syncFromFirestore(): Promise<{ eventsCount: number; ticketsCount: number }> {
+    return this.syncFromCloud();
   }
 
   // ================= EVENTS =================
@@ -125,7 +208,17 @@ export class StorageService {
     events.unshift(newEvent);
     this.saveEvents(events);
 
-    // Sync to Firestore Cloud Database
+    // 1. Persist to Cloud Server Database API
+    fetch('/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newEvent),
+    }).catch(e => console.warn('Cloud API saveEvent warning:', e));
+
+    // 2. Persist to Supabase if configured
+    SupabaseService.syncEvent(newEvent).catch(e => console.warn('Supabase syncEvent warning:', e));
+
+    // 3. Sync to Firestore if initialized
     FirebaseDbService.saveEvent(newEvent).catch(e => console.warn('Cloud saveEvent error:', e));
 
     return newEvent;
@@ -150,7 +243,17 @@ export class StorageService {
     events[idx] = updated;
     this.saveEvents(events);
 
-    // Sync to Firestore Cloud Database
+    // 1. Sync to Cloud Server API
+    fetch(`/api/events/${eventId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    }).catch(e => console.warn('Cloud API updateEvent warning:', e));
+
+    // 2. Sync to Supabase
+    SupabaseService.syncEvent(updated).catch(e => console.warn('Supabase updateEvent warning:', e));
+
+    // 3. Sync to Firestore
     FirebaseDbService.updateEvent(eventId, updates).catch(e => console.warn('Cloud updateEvent error:', e));
 
     return updated;
@@ -160,7 +263,15 @@ export class StorageService {
     const events = this.getEvents().filter(e => e.eventId !== eventId);
     this.saveEvents(events);
 
-    // Sync to Firestore Cloud Database
+    // 1. Delete on Cloud Server API
+    fetch(`/api/events/${eventId}`, {
+      method: 'DELETE',
+    }).catch(e => console.warn('Cloud API deleteEvent warning:', e));
+
+    // 2. Delete on Supabase
+    SupabaseService.deleteEvent(eventId).catch(e => console.warn('Supabase deleteEvent warning:', e));
+
+    // 3. Delete on Firestore
     FirebaseDbService.deleteEvent(eventId).catch(e => console.warn('Cloud deleteEvent error:', e));
   }
 
@@ -185,7 +296,7 @@ export class StorageService {
       return cleaned.map(t => {
         if (!t.hostPhone) {
           const ev = events.find(e => e.eventId === t.eventId);
-          t.hostPhone = ev?.hostPhone || '+91 98112 34567';
+          t.hostPhone = ev?.hostPhone || '';
         }
         return t;
       });
@@ -201,7 +312,17 @@ export class StorageService {
     tickets[idx] = { ...tickets[idx], ...updates };
     this.saveTickets(tickets);
 
-    // Sync to Firestore Cloud Database
+    // 1. Sync to Cloud API
+    fetch(`/api/tickets/${ticketId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    }).catch(() => {});
+
+    // 2. Sync to Supabase
+    SupabaseService.syncTicket(tickets[idx]).catch(() => {});
+
+    // 3. Sync to Firestore
     FirebaseDbService.updateTicket(ticketId, updates).catch(e => console.warn('Cloud updateTicket error:', e));
 
     return tickets[idx];
@@ -229,7 +350,17 @@ export class StorageService {
     tickets.unshift(ticket);
     this.saveTickets(tickets);
 
-    // Sync to Firestore Cloud Database
+    // 1. Sync to Cloud Server API
+    fetch('/api/tickets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ticket),
+    }).catch(e => console.warn('Cloud API saveTicket warning:', e));
+
+    // 2. Sync to Supabase
+    SupabaseService.syncTicket(ticket).catch(e => console.warn('Supabase syncTicket warning:', e));
+
+    // 3. Sync to Firestore
     FirebaseDbService.saveTicket(ticket).catch(e => console.warn('Cloud saveTicket error:', e));
   }
 
@@ -283,7 +414,7 @@ export class StorageService {
     }
 
     // Host check - gate scanner allows valid event verification
-    if (ticket.hostId !== currentHostId && currentHostId && currentHostId !== 'host-council-101' && currentHostId !== 'scanner-gate') {
+    if (ticket.hostId !== currentHostId && currentHostId && currentHostId !== 'scanner-gate') {
       // Allow verification with event notice
     }
 
@@ -309,7 +440,21 @@ export class StorageService {
     tickets[ticketIndex] = updatedTicket;
     this.saveTickets(tickets);
 
-    // Sync gate check-in status to Firestore Cloud Database
+    // 1. Sync to Cloud API
+    fetch(`/api/tickets/${updatedTicket.ticketId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entryStatus: 'entered',
+        entryTime: nowIso,
+        exitStatus: 'not_exited'
+      }),
+    }).catch(() => {});
+
+    // 2. Sync to Supabase
+    SupabaseService.syncTicket(updatedTicket).catch(() => {});
+
+    // 3. Sync to Firestore
     FirebaseDbService.updateTicket(updatedTicket.ticketId, {
       entryStatus: 'entered',
       entryTime: nowIso,
@@ -341,7 +486,17 @@ export class StorageService {
     ticket.status = 'cancelled';
     this.saveTickets(tickets);
 
-    // Sync cancelled status to Firestore
+    // 1. Sync to Cloud API
+    fetch(`/api/tickets/${ticketId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'cancelled' }),
+    }).catch(() => {});
+
+    // 2. Sync to Supabase
+    SupabaseService.syncTicket(ticket).catch(() => {});
+
+    // 3. Sync to Firestore
     FirebaseDbService.updateTicket(ticketId, { status: 'cancelled' }).catch(e => console.warn('Cloud cancelTicket error:', e));
 
     // Increase available tickets and reduce ticketsSold for the event
@@ -354,6 +509,18 @@ export class StorageService {
         evt.status = 'published';
       }
       this.saveEvents(events);
+
+      fetch(`/api/events/${evt.eventId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticketsSold: evt.ticketsSold,
+          availableTickets: evt.availableTickets,
+          status: evt.status
+        }),
+      }).catch(() => {});
+
+      SupabaseService.syncEvent(evt).catch(() => {});
       FirebaseDbService.updateEvent(evt.eventId, {
         ticketsSold: evt.ticketsSold,
         availableTickets: evt.availableTickets,
@@ -401,7 +568,18 @@ export class StorageService {
     const raw = localStorage.getItem(STORAGE_KEYS.ACCOUNTS);
     if (!raw) return [];
     try {
-      return JSON.parse(raw);
+      const parsed: RegisteredAccount[] = JSON.parse(raw);
+      // Clean out any legacy demo accounts
+      const cleaned = parsed.filter(a => 
+        a.email && 
+        !a.email.includes('@campus.edu') && 
+        !a.email.includes('host@campus') && 
+        !a.email.includes('student@campus')
+      );
+      if (cleaned.length !== parsed.length) {
+        this.saveRegisteredAccounts(cleaned);
+      }
+      return cleaned;
     } catch {
       return [];
     }
@@ -426,7 +604,14 @@ export class StorageService {
     }
     this.saveRegisteredAccounts(accounts);
 
-    // Sync to Firestore Cloud Database
+    // 1. Sync to Cloud API
+    fetch('/api/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(account),
+    }).catch(e => console.warn('Cloud API saveAccount warning:', e));
+
+    // 2. Sync to Firestore
     FirebaseDbService.saveAccount(account).catch(e => console.warn('Cloud saveAccount error:', e));
   }
 
@@ -453,6 +638,12 @@ export class StorageService {
     const payouts = this.getPayouts();
     payouts.unshift(payout);
     this.savePayouts(payouts);
+
+    fetch('/api/payouts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payout),
+    }).catch(() => {});
   }
 
   static createPayout(payoutData: Omit<PayoutRecord, 'payoutId' | 'status' | 'referenceId' | 'timestamp'>): PayoutRecord {
@@ -468,7 +659,14 @@ export class StorageService {
     payouts.unshift(newPayout);
     this.savePayouts(payouts);
 
-    // Sync to Firestore Cloud Database
+    // 1. Sync to Cloud API
+    fetch('/api/payouts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newPayout),
+    }).catch(e => console.warn('Cloud API savePayout warning:', e));
+
+    // 2. Sync to Firestore Cloud Database
     FirebaseDbService.savePayout(newPayout).catch(e => console.warn('Cloud savePayout error:', e));
 
     return newPayout;

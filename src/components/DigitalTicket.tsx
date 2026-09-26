@@ -15,8 +15,8 @@ export const DigitalTicket: React.FC<DigitalTicketProps> = ({ ticket, onClose })
 
   // Retrieve event to get latest host helpline if not on ticket
   const event = StorageService.getEventById(ticket.eventId);
-  const organizerPhone = ticket.hostPhone || event?.hostPhone || '+91 98112 34567';
-  const organizerName = event?.hostName || 'Campus Organizing Committee';
+  const organizerPhone = ticket.hostPhone || event?.hostPhone || '';
+  const organizerName = event?.hostName || 'Event Organizer';
 
   useEffect(() => {
     if (canvasRef.current) {
@@ -88,7 +88,7 @@ export const DigitalTicket: React.FC<DigitalTicketProps> = ({ ticket, onClose })
           
           <div className="absolute top-3 left-4 right-4 flex items-center justify-between">
             <span className="text-[10px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md text-amber-300 border border-amber-400/40 flex items-center gap-1">
-              <Sparkles className="w-3 h-3" /> CampusPass Verified
+              <Sparkles className="w-3 h-3" /> Fest+ Verified
             </span>
             <div className="flex items-center gap-1.5">
               {getStatusBadge()}
@@ -251,7 +251,7 @@ export const DigitalTicket: React.FC<DigitalTicketProps> = ({ ticket, onClose })
             if (navigator.share) {
               navigator.share({
                 title: ticket.eventTitle,
-                text: `Here is my CampusPass for ${ticket.eventTitle} (Ticket: ${ticket.ticketId})`,
+                text: `Here is my Fest+ Pass for ${ticket.eventTitle} (Ticket: ${ticket.ticketId})`,
                 url: window.location.href,
               }).catch(() => {});
             } else {

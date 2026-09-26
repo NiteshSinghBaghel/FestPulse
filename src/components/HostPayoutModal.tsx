@@ -105,8 +105,8 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
       setProcessingStatus('Clearing via Bank IMPS Network...');
 
       const result = await PaymentService.processHostPayout({
-        hostId: currentUser?.uid || 'host-council-101',
-        hostName: currentUser?.name || 'Campus Organizing Committee',
+        hostId: currentUser?.uid || '',
+        hostName: currentUser?.name || 'Event Host',
         amount: Number(amount),
         method: transferMethod,
         destination: transferMethod === 'UPI' ? upiId.trim() : accountNumber.trim(),

@@ -1,4 +1,5 @@
 import React from 'react';
+import { FestLogo } from './FestLogo';
 import { 
   ShieldCheck, 
   Globe, 
@@ -19,17 +20,12 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
           
           {/* Brand Col */}
           <div className="lg:col-span-2 space-y-4">
-            <div className="flex items-center gap-3 select-none">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-500 to-indigo-600 flex items-center justify-center text-white font-black text-xl shadow-md">
-                CP
-              </div>
-              <div>
-                <span className="text-xl font-black text-white tracking-tight">CampusPass</span>
-                <span className="ml-2 text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
-                  Fest '26
-                </span>
-              </div>
-            </div>
+            <FestLogo
+              size="md"
+              variant="light"
+              showSubtitle={false}
+              className="cursor-pointer"
+            />
             
             <p className="text-xs sm:text-sm text-slate-400 max-w-sm leading-relaxed">
               Official university ticketing and gate verification platform. Instant UPI pass issuance, verifiable cryptographically signed QR tokens, and real-time attendance velocity tracking for college campuses.
@@ -120,7 +116,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
 
         {/* Bottom Bar */}
         <div className="pt-8 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
-          <p>© 2026 CampusPass Inc. All rights reserved. Built for Inter-University Events.</p>
+          <p>© 2026 Fest-Plus (Fest+) Inc. All rights reserved. Built for Inter-University Events.</p>
           <div className="flex items-center gap-6 text-[11px]">
             <span className="hover:text-slate-300 cursor-pointer">Privacy Policy</span>
             <span className="hover:text-slate-300 cursor-pointer">Terms of Service</span>

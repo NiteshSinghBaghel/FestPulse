@@ -49,12 +49,33 @@ export const App: React.FC = () => {
     }
   };
 
-  // Initial Firestore Cloud Database synchronization on mount
+  // Multi-device Cloud Database synchronization & live real-time polling
   useEffect(() => {
-    StorageService.syncFromFirestore().then(() => {
+    // 1. Initial sync
+    StorageService.syncFromCloud().then(() => {
       refreshData();
     });
-  }, []);
+
+    // 2. Refresh on window focus (e.g. user created event on phone, then looks at laptop browser)
+    const handleFocus = () => {
+      StorageService.syncFromCloud().then(() => {
+        refreshData();
+      });
+    };
+    window.addEventListener('focus', handleFocus);
+
+    // 3. Periodic background sync every 8 seconds
+    const interval = setInterval(() => {
+      StorageService.syncFromCloud().then(() => {
+        refreshData();
+      });
+    }, 8000);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
+    };
+  }, [currentUser, role]);
 
   useEffect(() => {
     refreshData();

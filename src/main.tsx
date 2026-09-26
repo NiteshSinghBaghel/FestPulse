@@ -24,7 +24,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('Uncaught error in CampusPass:', error, errorInfo);
+    console.error('Uncaught error in Fest-Plus:', error, errorInfo);
   }
 
   render() {

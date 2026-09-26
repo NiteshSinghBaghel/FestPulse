@@ -1,0 +1,11 @@
+{
+  "events": [],
+  "tickets": [],
+  "accounts": [],
+  "payouts": [],
+  "supabaseConfig": {
+    "url": "",
+    "anonKey": "",
+    "enabled": false
+  }
+}

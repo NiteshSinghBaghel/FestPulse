@@ -255,7 +255,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
               className="w-full py-3 px-4 rounded-2xl bg-rose-50 hover:bg-rose-100 border border-rose-200/80 text-rose-700 font-black text-xs flex items-center justify-center gap-2 transition active:scale-[0.98] cursor-pointer shadow-2xs"
             >
               <LogOut className="w-4 h-4 text-rose-600" />
-              <span>Sign Out of CampusPass</span>
+              <span>Sign Out of Fest-Plus</span>
             </button>
           </div>
         </div>
