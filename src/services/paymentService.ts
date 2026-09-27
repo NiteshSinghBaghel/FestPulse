@@ -2,12 +2,13 @@ import { CollegeEvent, Ticket, PaymentRecord, PayoutRecord } from '../types';
 import { StorageService } from './storageService';
 import { FirebaseDbService } from './firebaseDbService';
 
-// Razorpay Official Credentials (Configured with Real Live Production Keys)
+// Razorpay Official Credentials (Configured with Test Mode Keys for Sandbox Testing)
 export const RAZORPAY_CONFIG = {
-  keyId: ((import.meta as any).env?.VITE_RAZORPAY_KEY_ID as string) || 'rzp_live_Tggr3y70eJFfd4',
-  keySecret: ((import.meta as any).env?.VITE_RAZORPAY_KEY_SECRET as string) || 'k039KgKPjvENzG0GDewKGBUA',
+  keyId: ((import.meta as any).env?.VITE_RAZORPAY_KEY_ID as string) || 'rzp_test_5Wj8tV4x6zK9aL',
+  keySecret: ((import.meta as any).env?.VITE_RAZORPAY_KEY_SECRET as string) || 'test_secret_key_123',
   merchantName: 'Fest-Plus',
-  themeColor: '#4f46e5'
+  themeColor: '#4f46e5',
+  isTestMode: true
 };
 
 export interface HostPayoutRequest {

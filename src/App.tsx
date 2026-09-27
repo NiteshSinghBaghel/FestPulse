@@ -93,6 +93,13 @@ export const App: React.FC = () => {
     }
   }, [role]);
 
+  const handleClosePassAndGoToDashboard = () => {
+    setNewlyPurchasedTicket(null);
+    setSelectedEvent(null);
+    setSelectedAttendeeEvent(null);
+    setActiveTab(role === 'host' ? 'host-dashboard' : 'my-tickets');
+  };
+
   if (!currentUser) {
     return <AuthPage onSuccess={refreshData} />;
   }
@@ -245,24 +252,16 @@ export const App: React.FC = () => {
       {/* Newly Purchased Digital Ticket Modal */}
       {newlyPurchasedTicket && (
         <div 
-          onClick={() => setNewlyPurchasedTicket(null)}
+          onClick={handleClosePassAndGoToDashboard}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in overflow-y-auto cursor-pointer"
         >
           <div 
             onClick={(e) => e.stopPropagation()}
             className="relative w-full max-w-sm my-auto cursor-default"
           >
-            <button
-              type="button"
-              onClick={() => setNewlyPurchasedTicket(null)}
-              className="absolute -top-11 right-0 py-1.5 px-3 rounded-full bg-white/95 hover:bg-white border border-slate-200 text-slate-800 font-bold text-xs shadow-md flex items-center gap-1.5 transition z-10 active:scale-95"
-            >
-              <X className="w-4 h-4 text-slate-600" />
-              <span>Cut / Close</span>
-            </button>
             <DigitalTicket
               ticket={newlyPurchasedTicket}
-              onClose={() => setNewlyPurchasedTicket(null)}
+              onClose={handleClosePassAndGoToDashboard}
             />
           </div>
         </div>
