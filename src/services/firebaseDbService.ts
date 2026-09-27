@@ -23,6 +23,30 @@ const COLLECTIONS = {
 };
 
 export class FirebaseDbService {
+  // ================= DATABASE RESET =================
+  static async clearAll(): Promise<void> {
+    if (!isFirebaseInitialized || !db) return;
+    try {
+      const collectionsToClear = [
+        COLLECTIONS.EVENTS,
+        COLLECTIONS.TICKETS,
+        COLLECTIONS.PAYMENTS,
+        COLLECTIONS.ACCOUNTS,
+        COLLECTIONS.USERS,
+        COLLECTIONS.PAYOUTS,
+      ];
+      for (const colName of collectionsToClear) {
+        const colRef = collection(db, colName);
+        const snapshot = await getDocs(colRef);
+        const deletes = snapshot.docs.map(docSnap => deleteDoc(docSnap.ref));
+        await Promise.all(deletes);
+      }
+      console.log('FirebaseDbService: All Firestore collections flushed successfully.');
+    } catch (error) {
+      console.warn('FirebaseDbService.clearAll error:', error);
+    }
+  }
+
   // ================= EVENTS =================
   static async getEvents(): Promise<CollegeEvent[]> {
     if (!isFirebaseInitialized || !db) return [];

@@ -3,15 +3,28 @@ import { FirebaseDbService } from './firebaseDbService';
 import { SupabaseService } from './supabaseService';
 
 const STORAGE_KEYS = {
-  EVENTS: 'campuspass_events_v1',
-  TICKETS: 'campuspass_tickets_v1',
-  USERS: 'campuspass_users_v1',
-  PAYMENTS: 'campuspass_payments_v1',
-  CURRENT_USER: 'campuspass_auth_user_v1',
-  BOOKMARKS: 'campuspass_bookmarks_v1',
-  PAYOUTS: 'campuspass_payouts_v1',
-  ACCOUNTS: 'campuspass_accounts_db_v1',
+  EVENTS: 'campuspass_events_v3',
+  TICKETS: 'campuspass_tickets_v3',
+  USERS: 'campuspass_users_v3',
+  PAYMENTS: 'campuspass_payments_v3',
+  CURRENT_USER: 'campuspass_auth_user_v3',
+  BOOKMARKS: 'campuspass_bookmarks_v3',
+  PAYOUTS: 'campuspass_payouts_v3',
+  ACCOUNTS: 'campuspass_accounts_db_v3',
 };
+
+// Automatic cleanup of legacy cached test data
+if (typeof window !== 'undefined') {
+  try {
+    Object.keys(localStorage).forEach((k) => {
+      if (k.startsWith('campuspass_') && (k.includes('_v1') || k.includes('_v2'))) {
+        localStorage.removeItem(k);
+      }
+    });
+  } catch {
+    // safe fallback
+  }
+}
 
 // Clean slate: events are created by users and hosts
 export const INITIAL_EVENTS: CollegeEvent[] = [];
@@ -36,6 +49,8 @@ export class StorageService {
       let remoteAccounts: RegisteredAccount[] = [];
       let remotePayouts: PayoutRecord[] = [];
 
+      let remoteFlushedAt = 0;
+
       try {
         const res = await fetch('/api/sync');
         if (res.ok) {
@@ -44,9 +59,20 @@ export class StorageService {
           remoteTickets = Array.isArray(syncData.tickets) ? syncData.tickets : [];
           remoteAccounts = Array.isArray(syncData.accounts) ? syncData.accounts : [];
           remotePayouts = Array.isArray(syncData.payouts) ? syncData.payouts : [];
+          remoteFlushedAt = typeof syncData.flushedAt === 'number' ? syncData.flushedAt : 0;
         }
       } catch (err) {
         console.warn('[Sync] Cloud server API sync warning:', err);
+      }
+
+      // Check if server database was flushed
+      if (remoteFlushedAt > 0 && remoteEvents.length === 0 && remoteTickets.length === 0) {
+        this.saveEvents([]);
+        this.saveTickets([]);
+        this.saveRegisteredAccounts([]);
+        this.savePayouts([]);
+        localStorage.removeItem(STORAGE_KEYS.BOOKMARKS);
+        return { eventsCount: 0, ticketsCount: 0 };
       }
 
       // 2. Fetch from Supabase if connected

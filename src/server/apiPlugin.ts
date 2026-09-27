@@ -13,6 +13,7 @@ interface DatabaseSchema {
   tickets: any[];
   accounts: any[];
   payouts: any[];
+  flushedAt?: number;
   supabaseConfig: {
     url: string;
     anonKey: string;
@@ -32,6 +33,7 @@ function loadDatabase(): DatabaseSchema {
         tickets: [],
         accounts: [],
         payouts: [],
+        flushedAt: Date.now(),
         supabaseConfig: { url: '', anonKey: '', enabled: false },
       };
       fs.writeFileSync(DB_FILE_PATH, JSON.stringify(initial, null, 2), 'utf8');
@@ -44,6 +46,7 @@ function loadDatabase(): DatabaseSchema {
       tickets: Array.isArray(parsed.tickets) ? parsed.tickets : [],
       accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
       payouts: Array.isArray(parsed.payouts) ? parsed.payouts : [],
+      flushedAt: typeof parsed.flushedAt === 'number' ? parsed.flushedAt : 0,
       supabaseConfig: parsed.supabaseConfig || { url: '', anonKey: '', enabled: false },
     };
   } catch (error) {
@@ -53,6 +56,7 @@ function loadDatabase(): DatabaseSchema {
       tickets: [],
       accounts: [],
       payouts: [],
+      flushedAt: 0,
       supabaseConfig: { url: '', anonKey: '', enabled: false },
     };
   }
@@ -137,6 +141,7 @@ export function apiServerPlugin(): Plugin {
             tickets: db.tickets,
             accounts: db.accounts,
             payouts: db.payouts,
+            flushedAt: db.flushedAt || 0,
             supabaseConfig: db.supabaseConfig,
             timestamp: new Date().toISOString(),
           });
@@ -148,9 +153,11 @@ export function apiServerPlugin(): Plugin {
           db.tickets = [];
           db.accounts = [];
           db.payouts = [];
+          db.flushedAt = Date.now();
           saveDatabase(db);
           return sendJson(res, 200, {
             success: true,
+            flushedAt: db.flushedAt,
             message: 'All database data (events, tickets, accounts, payouts) has been completely cleared.',
             eventsCount: 0,
             ticketsCount: 0,
