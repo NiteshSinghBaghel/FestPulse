@@ -93,11 +93,11 @@ export const App: React.FC = () => {
     }
   }, [role]);
 
-  const handleClosePassAndGoToDashboard = () => {
+  const handleClosePassAndGoToExplore = () => {
     setNewlyPurchasedTicket(null);
     setSelectedEvent(null);
     setSelectedAttendeeEvent(null);
-    setActiveTab(role === 'host' ? 'host-dashboard' : 'my-tickets');
+    setActiveTab('home');
   };
 
   if (!currentUser) {
@@ -252,7 +252,7 @@ export const App: React.FC = () => {
       {/* Newly Purchased Digital Ticket Modal */}
       {newlyPurchasedTicket && (
         <div 
-          onClick={handleClosePassAndGoToDashboard}
+          onClick={handleClosePassAndGoToExplore}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in overflow-y-auto cursor-pointer"
         >
           <div 
@@ -261,7 +261,7 @@ export const App: React.FC = () => {
           >
             <DigitalTicket
               ticket={newlyPurchasedTicket}
-              onClose={handleClosePassAndGoToDashboard}
+              onClose={handleClosePassAndGoToExplore}
             />
           </div>
         </div>

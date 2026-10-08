@@ -4,6 +4,7 @@ import { StorageService } from '../services/storageService';
 import { useAuth } from '../context/AuthContext';
 import { EditEventModal } from '../components/EditEventModal';
 import { HostPayoutModal } from '../components/HostPayoutModal';
+import { PayoutInvoiceModal, downloadPayoutInvoice } from '../components/PayoutInvoiceModal';
 import { TicketSalesAnalyticsChart } from '../components/TicketSalesAnalyticsChart';
 import { 
   BarChart3, 
@@ -27,7 +28,10 @@ import {
   FileCheck,
   Clock,
   Ticket as TicketIcon,
-  UserCheck
+  UserCheck,
+  FileText,
+  Download,
+  Receipt
 } from 'lucide-react';
 
 interface HostDashboardPageProps {
@@ -59,6 +63,8 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     currentTab === 'host-analytics' ? 'revenue' : 'overview';
   const [editingEvent, setEditingEvent] = useState<CollegeEvent | null>(null);
   const [isPayoutModalOpen, setIsPayoutModalOpen] = useState(false);
+  const [selectedInvoicePayout, setSelectedInvoicePayout] = useState<PayoutRecord | null>(null);
+  const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
   const [payoutsVersion, setPayoutsVersion] = useState(0);
 
   // Filter events for this host
@@ -689,9 +695,39 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                       </div>
                     </div>
 
-                    <div className="text-left sm:text-right shrink-0">
-                      <span className="text-base font-black text-emerald-700">₹{payout.amount.toLocaleString()}</span>
-                      <p className="text-[10px] text-slate-400 font-mono">{payout.payoutId}</p>
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 shrink-0">
+                      <div className="text-left sm:text-right">
+                        <span className="text-base font-black text-emerald-700">₹{payout.amount.toLocaleString()}</span>
+                        <p className="text-[10px] text-slate-400 font-mono">{payout.payoutId}</p>
+                      </div>
+
+                      {/* Invoice Show & Download Action Buttons */}
+                      <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedInvoicePayout(payout);
+                            setIsInvoiceModalOpen(true);
+                          }}
+                          className="flex-1 sm:flex-initial py-1.5 px-3 rounded-xl bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 text-indigo-700 font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-2xs active:scale-95 cursor-pointer"
+                          title="Show Full Official Invoice"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>Show Invoice</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            downloadPayoutInvoice(payout, currentUser?.college);
+                          }}
+                          className="flex-1 sm:flex-initial py-1.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-2xs active:scale-95 cursor-pointer"
+                          title="Download Tax & Remittance Invoice File"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Download</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -752,6 +788,17 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
           setPayoutsVersion((v) => v + 1);
           onEventsUpdated();
         }}
+      />
+
+      {/* Payout Settlement Invoice View & Download Modal */}
+      <PayoutInvoiceModal
+        isOpen={isInvoiceModalOpen}
+        payout={selectedInvoicePayout}
+        onClose={() => {
+          setIsInvoiceModalOpen(false);
+          setSelectedInvoicePayout(null);
+        }}
+        hostCollege={currentUser?.college}
       />
 
       {/* Confirmation Modal: Cancel Event */}

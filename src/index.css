@@ -209,3 +209,28 @@
   animation: floatGentle 3s ease-in-out infinite;
 }
 
+/* Print styles for Payout Invoices & Receipts */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #printable-payout-invoice, #printable-payout-invoice * {
+    visibility: visible;
+  }
+  #printable-payout-invoice {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 24px;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+

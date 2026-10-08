@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { PayoutRecord } from '../types';
 import { PaymentService } from '../services/paymentService';
+import { downloadPayoutInvoice } from './PayoutInvoiceModal';
 import { 
   X, 
   IndianRupee, 
@@ -217,17 +218,26 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
             <div className="pt-2 flex flex-col sm:flex-row gap-2">
               <button
                 type="button"
+                onClick={() => downloadPayoutInvoice(completedPayout, currentUser?.college)}
+                className="flex-1 py-3 px-4 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-md cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Tax Invoice</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={handlePrintReceipt}
                 className="flex-1 py-3 px-4 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs flex items-center justify-center gap-1.5 transition border border-slate-200 cursor-pointer"
               >
                 <Printer className="w-4 h-4" />
-                <span>Print / Download Receipt</span>
+                <span>Print Receipt</span>
               </button>
 
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-3 px-4 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md transition cursor-pointer"
+                className="py-3 px-5 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-md transition cursor-pointer"
               >
                 Done
               </button>
