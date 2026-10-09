@@ -117,31 +117,30 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
             <FestLogo size="md" variant="dark" subtitleText="🎓 Inter-College Event Network" />
           </div>
 
-          {/* ================= TOP-RIGHT: SIMPLE TEXT "Login" PUSHED TO THE FAR RIGHT ================= */}
+          {/* ================= TOP-RIGHT: SIMPLE TEXT "Login" WITH CLEAN OPTIONS DIRECTLY BELOW ================= */}
           <div 
-            className="relative shrink-0"
+            className="relative shrink-0 flex flex-col items-end"
             onMouseEnter={handleMouseEnterLogin}
             onMouseLeave={handleMouseLeaveLogin}
           >
             <button
               onClick={() => setIsLoginMenuOpen(!isLoginMenuOpen)}
-              className="py-1 px-1 text-slate-700 hover:text-indigo-600 font-bold text-sm tracking-wide transition-colors flex items-center gap-1 cursor-pointer group"
+              className="py-1 px-1 text-black hover:text-sky-400 font-semibold text-sm tracking-wide transition-colors flex items-center gap-1 cursor-pointer select-none"
               aria-haspopup="true"
               aria-expanded={isLoginMenuOpen}
             >
-              <span className="group-hover:text-indigo-600">Login</span>
-              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600 transition-transform duration-200 ${isLoginMenuOpen ? 'rotate-180' : ''}`} />
+              <span>Login</span>
+              <ChevronDown className={`w-3.5 h-3.5 text-black hover:text-sky-400 transition-transform duration-200 ${isLoginMenuOpen ? 'rotate-180 text-sky-400' : ''}`} />
             </button>
 
-            {/* Hover Dropdown with Student Login & Host Login */}
+            {/* Hover Options directly below Login in clean small text */}
             {isLoginMenuOpen && (
               <div 
-                className="absolute right-0 top-full pt-2 w-60 sm:w-64 z-50 animate-fade-in"
+                className="absolute right-0 top-full pt-1.5 z-50 animate-fade-in whitespace-nowrap"
                 onMouseEnter={handleMouseEnterLogin}
                 onMouseLeave={handleMouseLeaveLogin}
               >
-                <div className="bg-white/98 backdrop-blur-xl border border-slate-200 rounded-2xl p-1.5 shadow-xl shadow-slate-300/50 text-left space-y-1">
-                  
+                <div className="bg-white/95 backdrop-blur-md border border-slate-200/80 rounded-xl py-2 px-3 shadow-lg shadow-slate-200/50 flex flex-col items-start gap-1.5 min-w-[130px]">
                   {/* Option 1: Student Login */}
                   <button
                     type="button"
@@ -149,20 +148,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
                       setIsLoginMenuOpen(false);
                       onLogin('user');
                     }}
-                    className="w-full p-2.5 rounded-xl hover:bg-indigo-50/90 text-left transition flex items-center gap-2.5 group cursor-pointer"
+                    className="w-full text-left py-1 px-1.5 rounded-md text-xs font-semibold text-black hover:text-sky-400 hover:bg-sky-50/60 transition-colors cursor-pointer flex items-center justify-between group"
                   >
-                    <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0 group-hover:bg-indigo-600 group-hover:text-white transition">
-                      <Ticket className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <span className="font-bold text-xs text-slate-900 group-hover:text-indigo-600 block">
-                        Student Login
-                      </span>
-                      <span className="text-[10px] text-slate-500 block truncate">
-                        Browse passes & tickets
-                      </span>
-                    </div>
+                    <span>Student Login</span>
+                    <span className="text-[10px] text-slate-400 group-hover:text-sky-400 transition-colors">→</span>
                   </button>
+
+                  <div className="w-full h-px bg-slate-100" />
 
                   {/* Option 2: Host Login */}
                   <button
@@ -171,19 +163,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
                       setIsLoginMenuOpen(false);
                       onLogin('host');
                     }}
-                    className="w-full p-2.5 rounded-xl hover:bg-amber-50/90 text-left transition flex items-center gap-2.5 group cursor-pointer"
+                    className="w-full text-left py-1 px-1.5 rounded-md text-xs font-semibold text-black hover:text-sky-400 hover:bg-sky-50/60 transition-colors cursor-pointer flex items-center justify-between group"
                   >
-                    <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0 group-hover:bg-amber-600 group-hover:text-white transition">
-                      <Zap className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <span className="font-bold text-xs text-slate-900 group-hover:text-amber-700 block">
-                        Host Login
-                      </span>
-                      <span className="text-[10px] text-slate-500 block truncate">
-                        Publish fests & gate scanner
-                      </span>
-                    </div>
+                    <span>Host Login</span>
+                    <span className="text-[10px] text-slate-400 group-hover:text-sky-400 transition-colors">→</span>
                   </button>
                 </div>
               </div>
