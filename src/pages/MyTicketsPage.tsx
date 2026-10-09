@@ -44,7 +44,7 @@ export const MyTicketsPage: React.FC<MyTicketsPageProps> = ({ tickets, onExplore
   };
 
   return (
-    <div className="pb-20 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6">
+    <div className="pb-20 w-full px-4 sm:px-6 lg:px-10 xl:px-12 pt-4 sm:pt-6">
       {/* Page Header */}
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -88,7 +88,7 @@ export const MyTicketsPage: React.FC<MyTicketsPageProps> = ({ tickets, onExplore
 
       {/* Ticket List (Grid on tablet/desktop) */}
       {displayedTickets.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {displayedTickets.map((t) => {
             const isEntered = t.entryStatus === 'entered';
             const isExited = t.exitStatus === 'exited';

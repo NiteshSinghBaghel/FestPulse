@@ -10,6 +10,7 @@ interface FestLogoProps {
   showBadge?: boolean;
   animated?: boolean;
   className?: string;
+  onClick?: () => void;
 }
 
 export const FestLogo: React.FC<FestLogoProps> = ({
@@ -21,6 +22,7 @@ export const FestLogo: React.FC<FestLogoProps> = ({
   showBadge = true,
   animated = true,
   className = '',
+  onClick,
 }) => {
   // Dimension definitions
   const dimensions = {
@@ -65,7 +67,13 @@ export const FestLogo: React.FC<FestLogoProps> = ({
   const isLightMode = variant === 'light'; // Light text on dark bg
 
   return (
-    <div className={`flex items-center gap-3 select-none ${className}`}>
+    <div 
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+      className={`flex items-center gap-3 select-none ${onClick ? 'cursor-pointer' : ''} ${className}`}
+    >
       {/* Crisp, Modern Emblem / Icon */}
       <div className="relative group shrink-0">
         {/* Logo Container Box - Crisp, premium gradient with subtle, tight shadow */}

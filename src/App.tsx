@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from './context/AuthContext';
-import { CollegeEvent, Ticket } from './types';
+import { CollegeEvent, Ticket, UserRole } from './types';
 import { StorageService } from './services/storageService';
 import { Navbar } from './components/Navbar';
 import { BottomNav } from './components/BottomNav';
@@ -11,6 +11,7 @@ import { ProfilePage } from './pages/ProfilePage';
 import { HostDashboardPage } from './pages/HostDashboardPage';
 import { HostAttendeesPage } from './pages/HostAttendeesPage';
 import { AuthPage } from './pages/AuthPage';
+import { LandingPage } from './pages/LandingPage';
 import { QrScannerModal } from './components/QrScannerModal';
 import { CreateEventModal } from './components/CreateEventModal';
 import { DigitalTicket } from './components/DigitalTicket';
@@ -35,6 +36,10 @@ export const App: React.FC = () => {
   // App Data
   const [events, setEvents] = useState<CollegeEvent[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
+
+  // Landing Page & Auth Flow State
+  const [landingView, setLandingView] = useState<'landing' | 'login'>('landing');
+  const [targetLoginRole, setTargetLoginRole] = useState<UserRole>('user');
 
   // Load events & tickets on mount & updates
   const refreshData = () => {
@@ -101,7 +106,28 @@ export const App: React.FC = () => {
   };
 
   if (!currentUser) {
-    return <AuthPage onSuccess={refreshData} />;
+    if (landingView === 'landing') {
+      return (
+        <LandingPage
+          onLogin={(chosenRole) => {
+            setTargetLoginRole(chosenRole);
+            setLandingView('login');
+          }}
+          onExploreEvents={() => {
+            setTargetLoginRole('user');
+            setLandingView('login');
+          }}
+        />
+      );
+    }
+    return (
+      <AuthPage 
+        onSuccess={refreshData} 
+        initialRole={targetLoginRole}
+        onBackToLanding={() => setLandingView('landing')}
+        onSwitchRole={(newRole) => setTargetLoginRole(newRole)}
+      />
+    );
   }
 
   return (

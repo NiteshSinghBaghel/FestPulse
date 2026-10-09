@@ -76,7 +76,7 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
   };
 
   return (
-    <div className="pb-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6">
+    <div className="pb-20 w-full px-4 sm:px-6 lg:px-10 xl:px-12 pt-4 sm:pt-6">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 mb-6">
         <div className="flex items-center gap-3">
@@ -191,7 +191,7 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
 
       {/* Attendees Table / Cards */}
       {filteredTickets.length > 0 ? (
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5">
           {filteredTickets.map((t) => {
             const isEntered = t.entryStatus === 'entered';
             // Sanitize display name so organizer/club name never repeats as attendee

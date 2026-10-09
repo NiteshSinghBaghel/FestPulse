@@ -196,11 +196,11 @@ export const HomePage: React.FC<HomePageProps> = ({
   const quickSearchTags = ['AI Summit', 'Football Derby', 'Hackathon', 'Cultural Night', 'Sports Complex', 'Auditorium'];
 
   return (
-    <div className="pb-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6 bg-slate-50 min-h-screen text-slate-900">
+    <div className="pb-20 w-full px-4 sm:px-6 lg:px-10 xl:px-12 pt-4 sm:pt-6 bg-slate-50 min-h-screen text-slate-900">
       {/* ================= 1. HERO BANNER (FIRST) ================= */}
       {!searchQuery && (
         <div className="relative rounded-3xl overflow-hidden bg-gradient-to-r from-indigo-900 via-indigo-800 to-indigo-950 p-6 sm:p-8 lg:p-10 mb-6 shadow-md text-white">
-          <div className="relative z-10 max-w-2xl">
+          <div className="relative z-10 max-w-4xl">
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/15 backdrop-blur-md text-amber-300 text-xs font-bold mb-3 border border-white/20">
               <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Campus Fest Season '26
             </div>
@@ -474,13 +474,13 @@ export const HomePage: React.FC<HomePageProps> = ({
       {/* ================= 8. RESULTS LIST WITH SKELETON ANIMATIONS ================= */}
       {isLoading ? (
         /* Skeleton Cards Loading Grid/List */
-        <div className={viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5' : 'space-y-3'}>
-          {[1, 2, 3, 4, 5, 6].map((key) => (
+        <div className={viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-4 gap-5 sm:gap-6' : 'space-y-3'}>
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((key) => (
             <EventCardSkeleton key={key} layout={viewMode} />
           ))}
         </div>
       ) : filteredEvents.length > 0 ? (
-        <div className={viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5' : 'space-y-3'}>
+        <div className={viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-4 gap-5 sm:gap-6' : 'space-y-3'}>
           {filteredEvents.map((event) => (
             <EventCard
               key={event.eventId}

@@ -169,7 +169,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
   const isMatch = newPassword.length > 0 && newPassword === confirmPassword;
 
   return (
-    <div className="pb-20 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6">
+    <div className="pb-20 w-full px-4 sm:px-6 lg:px-10 xl:px-12 pt-4 sm:pt-6">
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-2xl sm:text-3xl font-black text-slate-900">Account Profile</h1>
@@ -178,9 +178,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Profile Badge Card & Role info */}
-        <div className="space-y-6">
+        <div className="lg:col-span-4 xl:col-span-3 space-y-6">
           <div className="p-6 rounded-3xl bg-white border border-slate-200 shadow-xs flex flex-col items-center text-center">
             <div className="w-20 h-20 rounded-3xl ring-4 ring-indigo-500/20 overflow-hidden bg-slate-100 mb-3 shadow-xs">
               {currentUser?.photoURL ? (
@@ -260,8 +260,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
           </div>
         </div>
 
-        {/* Right Column: Edit Profile & Password Management (Spans 2 cols on desktop) */}
-        <div className="lg:col-span-2 space-y-6">
+        {/* Right Column: Edit Profile & Password Management (Spans 8 or 9 cols on desktop) */}
+        <div className="lg:col-span-8 xl:col-span-9 space-y-6">
           
           {/* Card 1: Profile Information (Read-only by default, click "Edit Profile" to edit) */}
           <div className="p-6 rounded-3xl bg-white border border-slate-200 shadow-xs transition-all">

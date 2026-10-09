@@ -50,7 +50,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
   };
 
   return (
-    <div className="pb-32 max-w-6xl mx-auto min-h-screen bg-slate-50 text-slate-900 px-4 sm:px-6 lg:px-8 pt-4 sm:pt-6">
+    <div className="pb-32 w-full min-h-screen bg-slate-50 text-slate-900 px-4 sm:px-6 lg:px-10 xl:px-12 pt-4 sm:pt-6">
       {/* Top Header Card */}
       <div className="relative pt-4 px-4 sm:px-6 pb-6 bg-white border border-slate-200/80 rounded-3xl mb-6 shadow-xs">
         {/* Top Control Bar */}
@@ -118,9 +118,9 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
         </div>
 
         {/* Two-Column Responsive Grid on Desktop */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Info (Left 2 cols) */}
-          <div className="lg:col-span-2 space-y-5">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Main Info (Left 8 cols) */}
+          <div className="lg:col-span-8 space-y-5">
             {/* Quick Details Grid */}
             <div className="p-5 sm:p-6 rounded-3xl bg-slate-50 border border-slate-200/90 shadow-2xs space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -199,8 +199,8 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
             </div>
           </div>
 
-          {/* Right Column: Pass Booking & Capacity Sidebar */}
-          <div className="space-y-5">
+          {/* Right Column: Pass Booking & Capacity Sidebar (Spans 4 cols on desktop) */}
+          <div className="lg:col-span-4 space-y-5">
             {/* Pass Booking Box (Always visible on desktop!) */}
             <div className="p-6 rounded-3xl bg-slate-50 border border-slate-200/90 shadow-2xs sticky top-24">
               <div className="flex items-center justify-between mb-3">
