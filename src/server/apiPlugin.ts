@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import type { Plugin, Connect } from 'vite';
+import { PostgresService, POSTGRES_SCHEMA_SQL } from './postgresService';
 
 const DB_FILE_PATH = path.resolve(process.cwd(), 'data/campuspass_db.json');
 
@@ -138,9 +139,11 @@ export function apiServerPlugin(): Plugin {
 
         // 1. Health check
         if (url === '/api/health' && req.method === 'GET') {
+          const pgStatus = await PostgresService.getStatus();
           return sendJson(res, 200, {
             status: 'ok',
-            database: 'connected',
+            database: pgStatus.connected ? 'postgresql' : 'local_json',
+            postgres: pgStatus,
             eventsCount: db.events.length,
             ticketsCount: db.tickets.length,
             accountsCount: db.accounts.length,
@@ -148,14 +151,107 @@ export function apiServerPlugin(): Plugin {
           });
         }
 
+        // 1b. PostgreSQL Management Endpoints
+        if (url === '/api/postgres/status' && req.method === 'GET') {
+          const status = await PostgresService.getStatus();
+          return sendJson(res, 200, status);
+        }
+
+        if (url === '/api/postgres/schema' && req.method === 'GET') {
+          return sendJson(res, 200, {
+            schemaSql: POSTGRES_SCHEMA_SQL,
+            tables: ['events', 'tickets', 'accounts', 'payouts'],
+          });
+        }
+
+        if (url === '/api/postgres/connect' && req.method === 'POST') {
+          try {
+            const body = await parseBody(req);
+            const connectionString = body.connectionString || '';
+            if (!connectionString) {
+              return sendJson(res, 400, { success: false, error: 'Connection string is required' });
+            }
+
+            const connectResult = await PostgresService.connect(connectionString, true);
+            if (!connectResult.success) {
+              return sendJson(res, 400, connectResult);
+            }
+
+            // Auto-migrate current memory/JSON data into PostgreSQL
+            const migrationResult = await PostgresService.migrateFromData({
+              events: db.events,
+              tickets: db.tickets,
+              accounts: db.accounts,
+              payouts: db.payouts,
+            });
+
+            const status = await PostgresService.getStatus();
+            return sendJson(res, 200, {
+              success: true,
+              message: 'Connected to PostgreSQL database successfully and synced tables.',
+              status,
+              migration: migrationResult,
+            });
+          } catch (err: any) {
+            return sendJson(res, 500, { success: false, error: err.message || 'Error connecting to PostgreSQL' });
+          }
+        }
+
+        if (url === '/api/postgres/disconnect' && req.method === 'POST') {
+          await PostgresService.disconnect();
+          return sendJson(res, 200, { success: true, message: 'Disconnected from PostgreSQL' });
+        }
+
+        if (url === '/api/postgres/migrate' && req.method === 'POST') {
+          try {
+            if (!PostgresService.getConnected()) {
+              return sendJson(res, 400, { success: false, error: 'PostgreSQL is not connected.' });
+            }
+            const migration = await PostgresService.migrateFromData({
+              events: db.events,
+              tickets: db.tickets,
+              accounts: db.accounts,
+              payouts: db.payouts,
+            });
+            const status = await PostgresService.getStatus();
+            return sendJson(res, 200, { success: true, migration, status });
+          } catch (err: any) {
+            return sendJson(res, 500, { success: false, error: err.message || 'Error migrating to PostgreSQL' });
+          }
+        }
+
         // 2. Full synchronization: Get all cloud data
         if (url === '/api/sync' && req.method === 'GET') {
+          // If PostgreSQL is connected, hydrate latest state from PostgreSQL
+          if (PostgresService.getConnected()) {
+            try {
+              const [pgEvents, pgTickets, pgAccounts, pgPayouts] = await Promise.all([
+                PostgresService.getEvents(),
+                PostgresService.getTickets(),
+                PostgresService.getAccounts(),
+                PostgresService.getPayouts(),
+              ]);
+
+              if (pgEvents.length > 0 || pgTickets.length > 0 || pgAccounts.length > 0) {
+                db.events = pgEvents;
+                db.tickets = pgTickets;
+                db.accounts = pgAccounts;
+                db.payouts = pgPayouts;
+                saveDatabase(db);
+              }
+            } catch (pgErr) {
+              console.warn('[Sync] Postgres fetch error:', pgErr);
+            }
+          }
+
+          const pgStatus = await PostgresService.getStatus();
           return sendJson(res, 200, {
             events: db.events,
             tickets: db.tickets,
             accounts: db.accounts,
             payouts: db.payouts,
             flushedAt: db.flushedAt || 0,
+            postgresStatus: pgStatus,
             supabaseConfig: db.supabaseConfig,
             timestamp: new Date().toISOString(),
           });
@@ -169,6 +265,9 @@ export function apiServerPlugin(): Plugin {
           db.payouts = [];
           db.flushedAt = Date.now();
           saveDatabase(db);
+          if (PostgresService.getConnected()) {
+            await PostgresService.clearDatabase().catch((e: any) => console.warn('Postgres clear warning:', e));
+          }
           return sendJson(res, 200, {
             success: true,
             flushedAt: db.flushedAt,
@@ -196,6 +295,9 @@ export function apiServerPlugin(): Plugin {
               db.events.unshift(newEvent);
             }
             saveDatabase(db);
+            if (PostgresService.getConnected()) {
+              PostgresService.upsertEvent(newEvent).catch((e: any) => console.warn('Postgres event sync error:', e));
+            }
             return sendJson(res, 200, { success: true, event: newEvent });
           }
         }
@@ -210,11 +312,17 @@ export function apiServerPlugin(): Plugin {
             }
             db.events[idx] = { ...db.events[idx], ...updates, updatedAt: new Date().toISOString() };
             saveDatabase(db);
+            if (PostgresService.getConnected()) {
+              PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres event update error:', e));
+            }
             return sendJson(res, 200, { success: true, event: db.events[idx] });
           }
           if (req.method === 'DELETE') {
             db.events = db.events.filter((e) => e.eventId !== eventId);
             saveDatabase(db);
+            if (PostgresService.getConnected()) {
+              PostgresService.deleteEvent(eventId).catch((e: any) => console.warn('Postgres event delete error:', e));
+            }
             return sendJson(res, 200, { success: true });
           }
         }
@@ -236,6 +344,9 @@ export function apiServerPlugin(): Plugin {
               db.tickets.unshift(newTicket);
             }
             saveDatabase(db);
+            if (PostgresService.getConnected()) {
+              PostgresService.upsertTicket(newTicket).catch((e: any) => console.warn('Postgres ticket sync error:', e));
+            }
             return sendJson(res, 200, { success: true, ticket: newTicket });
           }
         }
@@ -250,6 +361,9 @@ export function apiServerPlugin(): Plugin {
             }
             db.tickets[idx] = { ...db.tickets[idx], ...updates };
             saveDatabase(db);
+            if (PostgresService.getConnected()) {
+              PostgresService.upsertTicket(db.tickets[idx]).catch((e: any) => console.warn('Postgres ticket update error:', e));
+            }
             return sendJson(res, 200, { success: true, ticket: db.tickets[idx] });
           }
         }
@@ -265,15 +379,39 @@ export function apiServerPlugin(): Plugin {
               return sendJson(res, 400, { error: 'Invalid account data' });
             }
             const cleanEmail = account.email.toLowerCase().trim();
+            const cleanOldEmail = account.oldEmail ? account.oldEmail.toLowerCase().trim() : null;
             const existingIdx = db.accounts.findIndex(
-              (a) => a.email.toLowerCase().trim() === cleanEmail || a.uid === account.uid
+              (a) => (account.uid && a.uid === account.uid) ||
+                     a.email.toLowerCase().trim() === cleanEmail ||
+                     (cleanOldEmail && a.email.toLowerCase().trim() === cleanOldEmail)
             );
             if (existingIdx >= 0) {
               db.accounts[existingIdx] = { ...db.accounts[existingIdx], ...account };
+              if (cleanOldEmail && cleanOldEmail !== cleanEmail) {
+                delete db.accounts[existingIdx].oldEmail;
+              }
             } else {
               db.accounts.push(account);
             }
+
+            // Keep attendee tickets synced if user details changed
+            if (Array.isArray(db.tickets)) {
+              for (const t of db.tickets) {
+                if (t.userId === account.uid || (cleanOldEmail && t.userEmail?.toLowerCase().trim() === cleanOldEmail)) {
+                  t.userEmail = cleanEmail;
+                  if (account.name) t.userName = account.name;
+                  if (account.phone) t.userPhone = account.phone;
+                }
+              }
+            }
+
             saveDatabase(db);
+            if (PostgresService.getConnected()) {
+              if (cleanOldEmail && cleanOldEmail !== cleanEmail) {
+                await PostgresService.deleteAccount(cleanOldEmail).catch((e: any) => console.warn('Postgres delete old account error:', e));
+              }
+              PostgresService.upsertAccount(account).catch((e: any) => console.warn('Postgres account sync error:', e));
+            }
             return sendJson(res, 200, { success: true, account });
           }
         }
@@ -290,6 +428,9 @@ export function apiServerPlugin(): Plugin {
             }
             db.payouts.unshift(payout);
             saveDatabase(db);
+            if (PostgresService.getConnected()) {
+              PostgresService.insertPayout(payout).catch((e: any) => console.warn('Postgres payout sync error:', e));
+            }
             return sendJson(res, 200, { success: true, payout });
           }
         }

@@ -366,7 +366,8 @@ export class PaymentService {
       }
     }
 
-    // Record payment in Firestore cloud database
+    // Record payment in local cache and Firestore cloud database
+    StorageService.saveNewPayment(paymentRecord);
     FirebaseDbService.savePayment(paymentRecord).catch(e => console.warn('Cloud savePayment error:', e));
 
     return {

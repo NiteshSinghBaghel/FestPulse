@@ -360,9 +360,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!currentUser) return { success: false, error: 'User is not signed in.' };
 
     try {
+      const oldEmail = currentUser.email.toLowerCase().trim();
+      const newEmail = data.email ? data.email.toLowerCase().trim() : oldEmail;
+      const newName = data.name !== undefined ? data.name.trim() : currentUser.name;
+      const newPhone = data.phone !== undefined ? data.phone.trim() : (currentUser.phone || '');
+      const newCollege = data.college !== undefined ? data.college.trim() : (currentUser.college || '');
+
+      // If email changed, ensure no existing conflicting account
+      if (newEmail !== oldEmail) {
+        const accounts = StorageService.getRegisteredAccounts();
+        const conflict = accounts.find(
+          a => a.email.toLowerCase().trim() === newEmail && a.uid !== currentUser.uid
+        );
+        if (conflict) {
+          return { success: false, error: 'An account with this email address already exists. Please choose a different email.' };
+        }
+      }
+
       const updatedUser: UserProfile = {
         ...currentUser,
-        ...data,
+        name: newName,
+        email: newEmail,
+        phone: newPhone,
+        college: newCollege,
+        photoURL: data.photoURL || currentUser.photoURL,
         updatedAt: new Date().toISOString(),
       };
 
@@ -380,28 +401,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCurrentUser(updatedUser);
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updatedUser));
 
-      // Update in registered accounts database
-      const account = StorageService.findAccountByEmail(updatedUser.email);
-      if (account) {
-        StorageService.saveAccount({
-          ...account,
-          name: updatedUser.name,
-          college: updatedUser.college,
-          phone: updatedUser.phone,
-          photoURL: updatedUser.photoURL,
-        });
-      }
+      // Persist across all databases (StorageService local/cloud, REST API, Postgres, Firestore)
+      await StorageService.updateAccountDetails(currentUser.uid, oldEmail, {
+        name: newName,
+        email: newEmail,
+        phone: newPhone,
+        college: newCollege,
+        photoURL: updatedUser.photoURL,
+      });
 
-      FirebaseDbService.saveUserProfile(updatedUser).catch(() => {});
       return { success: true };
     } catch (err: any) {
+      console.error('Update profile error:', err);
       return { success: false, error: err?.message || 'Failed to update profile.' };
     }
   };
 
   // Change password
   const changePassword = async (
-    _currentPassword: string,
+    currentPassword: string,
     newPassword: string
   ): Promise<{ success: boolean; error?: string }> => {
     if (!currentUser) return { success: false, error: 'User is not signed in.' };
@@ -410,10 +428,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      const account = StorageService.findAccountByEmail(currentUser.email);
+      const account = StorageService.findAccountByUid(currentUser.uid) || StorageService.findAccountByEmail(currentUser.email);
       if (account) {
+        if (account.password && account.password !== currentPassword) {
+          return { success: false, error: 'Current password does not match.' };
+        }
         account.password = newPassword;
-        StorageService.saveAccount(account);
+        await StorageService.saveAccountAsync(account);
       }
       return { success: true };
     } catch (err: any) {
@@ -429,14 +450,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      const account = StorageService.findAccountByEmail(cleanEmail);
+      const account = StorageService.findAccountByEmail(cleanEmail) || StorageService.findAccountByUid(cleanEmail);
       if (!account) {
         return { success: false, error: 'No account found with this email. Please register first.' };
       }
 
       if (newPassword) {
         account.password = newPassword;
-        StorageService.saveAccount(account);
+        await StorageService.saveAccountAsync(account);
       }
 
       return { success: true };

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { 
-  ShieldCheck, 
   Save,
   KeyRound,
   Lock,
@@ -81,7 +80,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
         name: name.trim(),
         email: email.trim(),
         phone: phone.trim(),
-        college: role === 'host' ? college.trim() : undefined,
+        college: college.trim(),
       });
 
       if (res.success) {
@@ -193,62 +192,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
             </div>
 
             <h2 className="text-lg font-black text-slate-900 truncate w-full">{currentUser?.name}</h2>
-            <p className="text-xs text-slate-500 truncate w-full mb-2">{currentUser?.email}</p>
-            
-            {/* Show organization only for Host, university removed for student */}
-            {role === 'host' && currentUser?.college && (
-              <p className="text-[11px] text-amber-700 font-semibold mb-3 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-200">
-                {currentUser.college}
-              </p>
-            )}
-
-            <div className="flex flex-wrap items-center justify-center gap-1.5 mt-1">
-              <span className={`text-[10px] font-extrabold uppercase px-3 py-1 rounded-full ${
-                role === 'host'
-                  ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                  : 'bg-indigo-100 text-indigo-800 border border-indigo-200'
-              }`}>
-                {role === 'host' ? '⚡ Organizer / Host' : '🎓 Student Pass Holder'}
-              </span>
-
-              {currentUser?.authProvider === 'google' && (
-                <span className="flex items-center gap-1 text-[10px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z" />
-                    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z" />
-                    <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z" />
-                    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z" />
-                  </svg>
-                  <span>Google SSO</span>
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Role Status Card */}
-          <div className="p-4 rounded-2xl bg-white border border-slate-200 flex items-start gap-3 shadow-2xs">
-            <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
-              role === 'host' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-700'
-            }`}>
-              <ShieldCheck className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-black text-slate-900">
-                  Role: {role === 'host' ? 'Host Portal' : 'Student Mode'}
-                </span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-600 font-bold border border-slate-200">
-                  Active
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-500 mt-1 leading-snug">
-                Your role was established at login. Profile and security settings apply directly to your account.
-              </p>
-            </div>
+            <p className="text-xs text-slate-500 truncate w-full">{currentUser?.email}</p>
           </div>
 
           {/* Quick Sign Out Action */}
-          <div className="pt-2">
+          <div>
             <button
               type="button"
               onClick={logout}
@@ -338,18 +286,15 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
                   </div>
                 </div>
 
-                {/* Only shown for Host role: University / Organizing Body */}
-                {role === 'host' && (
-                  <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                      Organizing Body / Institution
-                    </span>
-                    <div className="flex items-center gap-2 font-bold text-slate-900 text-sm">
-                      <Building2 className="w-4 h-4 text-slate-400" />
-                      <span>{currentUser?.college || 'Campus Event Council'}</span>
-                    </div>
+                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-100">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    {role === 'host' ? 'Organizing Body / Institution' : 'College / University'}
+                  </span>
+                  <div className="flex items-center gap-2 font-bold text-slate-900 text-sm">
+                    <Building2 className="w-4 h-4 text-slate-400" />
+                    <span>{currentUser?.college || (role === 'host' ? 'Campus Event Council' : 'Not added yet')}</span>
                   </div>
-                )}
+                </div>
               </div>
             ) : (
               /* Editable Form: Opens only when user clicks 'Edit Profile' */
@@ -413,22 +358,21 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
                   </div>
                 </div>
 
-                {/* Only Host has organizing institution/college; completely removed for Student */}
-                {role === 'host' && (
-                  <div>
-                    <label className="font-bold text-slate-700 block mb-1">Organizing Body / University</label>
-                    <div className="relative">
-                      <Building2 className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        value={college}
-                        onChange={(e) => setCollege(e.target.value)}
-                        className="w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 focus:outline-none focus:border-indigo-500 text-sm"
-                        placeholder="Campus Event Council / University Name"
-                      />
-                    </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    {role === 'host' ? 'Organizing Body / University' : 'College / University'}
+                  </label>
+                  <div className="relative">
+                    <Building2 className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={college}
+                      onChange={(e) => setCollege(e.target.value)}
+                      className="w-full pl-9 pr-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 focus:outline-none focus:border-indigo-500 text-sm"
+                      placeholder={role === 'host' ? 'Campus Event Council / University Name' : 'e.g. Stanford University, IIT Delhi'}
+                    />
                   </div>
-                )}
+                </div>
 
                 <div className="pt-2 flex items-center gap-3">
                   <button

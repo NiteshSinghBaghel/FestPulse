@@ -41,6 +41,53 @@ export const App: React.FC = () => {
   const [landingView, setLandingView] = useState<'landing' | 'login'>('landing');
   const [targetLoginRole, setTargetLoginRole] = useState<UserRole>('user');
 
+  // Ensure browser back button (arrow) returns to Landing Page (Home) when on Login Page
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      if (!currentUser) {
+        if (event.state?.view === 'landing' || !event.state?.view) {
+          setLandingView('landing');
+        } else if (event.state?.view === 'login') {
+          setLandingView('login');
+        }
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [currentUser]);
+
+  // When currentUser logs out, immediately redirect to landing page
+  useEffect(() => {
+    if (!currentUser) {
+      setLandingView('landing');
+      try {
+        window.history.replaceState({ view: 'landing' }, '');
+      } catch {
+        // safe fallback
+      }
+    }
+  }, [currentUser]);
+
+  const handleNavigateToLogin = (chosenRole: UserRole) => {
+    setTargetLoginRole(chosenRole);
+    setLandingView('login');
+    try {
+      window.history.pushState({ view: 'login' }, '');
+    } catch {
+      // safe fallback
+    }
+  };
+
+  const handleBackToLanding = () => {
+    setLandingView('landing');
+    try {
+      window.history.pushState({ view: 'landing' }, '');
+    } catch {
+      // safe fallback
+    }
+  };
+
   // Load events & tickets on mount & updates
   const refreshData = () => {
     const evts = StorageService.getEvents();
@@ -110,12 +157,10 @@ export const App: React.FC = () => {
       return (
         <LandingPage
           onLogin={(chosenRole) => {
-            setTargetLoginRole(chosenRole);
-            setLandingView('login');
+            handleNavigateToLogin(chosenRole);
           }}
           onExploreEvents={() => {
-            setTargetLoginRole('user');
-            setLandingView('login');
+            handleNavigateToLogin('user');
           }}
         />
       );
@@ -124,7 +169,7 @@ export const App: React.FC = () => {
       <AuthPage 
         onSuccess={refreshData} 
         initialRole={targetLoginRole}
-        onBackToLanding={() => setLandingView('landing')}
+        onBackToLanding={handleBackToLanding}
         onSwitchRole={(newRole) => setTargetLoginRole(newRole)}
       />
     );

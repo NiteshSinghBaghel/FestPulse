@@ -143,6 +143,22 @@ export class FirebaseDbService {
   }
 
   // ================= PAYMENTS =================
+  static async getPayments(): Promise<PaymentRecord[]> {
+    if (!isFirebaseInitialized || !db) return [];
+    try {
+      const colRef = collection(db, COLLECTIONS.PAYMENTS);
+      const snapshot = await getDocs(colRef);
+      const payments: PaymentRecord[] = [];
+      snapshot.forEach((docSnap) => {
+        payments.push(docSnap.data() as PaymentRecord);
+      });
+      return payments.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    } catch (error) {
+      console.warn('Firestore getPayments error:', error);
+      return [];
+    }
+  }
+
   static async savePayment(payment: PaymentRecord): Promise<boolean> {
     if (!isFirebaseInitialized || !db) return false;
     try {
@@ -220,7 +236,7 @@ export class FirebaseDbService {
   }
 
   static async saveUserProfile(profile: UserProfile): Promise<boolean> {
-    if (!isFirebaseInitialized || !db) return false;
+    if (!isFirebaseInitialized || !db || !profile?.uid) return false;
     try {
       const docRef = doc(db, COLLECTIONS.USERS, profile.uid);
       await setDoc(docRef, { ...profile, updatedAt: new Date().toISOString() }, { merge: true });
@@ -231,15 +247,38 @@ export class FirebaseDbService {
         name: profile.name,
         email: profile.email,
         role: profile.role,
-        college: profile.college,
-        phone: profile.phone,
-        photoURL: profile.photoURL,
-        authProvider: profile.authProvider,
-        createdAt: profile.createdAt,
+        college: profile.college || '',
+        phone: profile.phone || '',
+        photoURL: profile.photoURL || '',
+        authProvider: profile.authProvider || 'email',
+        createdAt: profile.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       }, { merge: true });
       return true;
     } catch (e) {
       console.warn('Firestore saveUserProfile error:', e);
+      return false;
+    }
+  }
+
+  static async updateUserTickets(userId: string, newName: string, newEmail: string, newPhone?: string): Promise<boolean> {
+    if (!isFirebaseInitialized || !db || !userId) return false;
+    try {
+      const colRef = collection(db, COLLECTIONS.TICKETS);
+      const q = query(colRef, where('userId', '==', userId));
+      const snapshot = await getDocs(q);
+      if (snapshot.empty) return true;
+      const updates = snapshot.docs.map(docSnap => 
+        setDoc(docSnap.ref, {
+          userName: newName,
+          userEmail: newEmail,
+          ...(newPhone ? { phone: newPhone } : {}),
+        }, { merge: true })
+      );
+      await Promise.all(updates);
+      return true;
+    } catch (e) {
+      console.warn('Firestore updateUserTickets error:', e);
       return false;
     }
   }
