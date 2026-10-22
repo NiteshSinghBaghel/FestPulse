@@ -212,14 +212,6 @@ export const MyTicketsPage: React.FC<MyTicketsPageProps> = ({ tickets, onExplore
             onClick={(e) => e.stopPropagation()}
             className="relative w-full max-w-sm my-auto cursor-default"
           >
-            <button
-              type="button"
-              onClick={() => setSelectedTicket(null)}
-              className="absolute -top-11 right-0 py-1.5 px-3 rounded-full bg-white/95 hover:bg-white border border-slate-200 text-slate-800 font-bold text-xs shadow-md flex items-center gap-1.5 transition z-10 active:scale-95"
-            >
-              <X className="w-4 h-4 text-slate-600" />
-              <span>Cut / Close</span>
-            </button>
             <DigitalTicket
               ticket={selectedTicket}
               onClose={() => setSelectedTicket(null)}

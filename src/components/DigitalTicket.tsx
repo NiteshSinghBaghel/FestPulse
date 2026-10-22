@@ -92,17 +92,6 @@ export const DigitalTicket: React.FC<DigitalTicketProps> = ({ ticket, onClose })
             </span>
             <div className="flex items-center gap-1.5">
               {getStatusBadge()}
-              {onClose && (
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="w-7 h-7 rounded-full bg-black/70 hover:bg-black/90 text-white flex items-center justify-center border border-white/30 transition active:scale-90"
-                  title="Cut / Close Ticket"
-                  aria-label="Cut / Close Ticket"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
             </div>
           </div>
         </div>
