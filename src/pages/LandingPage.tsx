@@ -197,6 +197,27 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
               Explore upcoming tech hackathons, cultural pro-shows, and college competitions. Book anti-counterfeit digital QR passes with instant UPI verification and zero platform fees.
             </p>
 
+            {/* Direct Login & Registration Call-To-Action Portals */}
+            <div className="pt-2 flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-3 w-full">
+              <button
+                type="button"
+                onClick={() => onLogin('user')}
+                className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2.5 cursor-pointer active:scale-95"
+              >
+                <Ticket className="w-4 h-4" />
+                <span>Student Portal (Login / Sign Up)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onLogin('host')}
+                className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-white hover:bg-amber-50/80 text-amber-900 border border-amber-200 hover:border-amber-300 font-bold text-sm shadow-2xs hover:shadow-xs transition-all flex items-center justify-center gap-2.5 cursor-pointer active:scale-95"
+              >
+                <Calendar className="w-4 h-4 text-amber-600" />
+                <span>Event Host / Organizer Login</span>
+              </button>
+            </div>
+
             {/* Minimal Trust Checklist */}
             <div className="pt-2 flex flex-wrap items-center justify-center lg:justify-start gap-5 text-xs text-slate-500 font-medium">
               <span className="flex items-center gap-1.5 bg-white/60 px-2.5 py-1 rounded-full border border-slate-200/80 shadow-2xs">

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { CollegeEvent, Ticket, PayoutRecord } from '../types';
 import { StorageService } from '../services/storageService';
 import { useAuth } from '../context/AuthContext';
@@ -31,7 +31,10 @@ import {
   UserCheck,
   FileText,
   Download,
-  Receipt
+  Receipt,
+  CreditCard,
+  Zap,
+  Settings
 } from 'lucide-react';
 
 interface HostDashboardPageProps {
@@ -67,25 +70,58 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
   const [payoutsVersion, setPayoutsVersion] = useState(0);
 
-  // Filter events for this host
-  const hostEvents = events.filter(
-    (e) => e.hostId === currentUser?.uid
-  );
+  // Auto-listen to cloud database sync and storage changes
+  useEffect(() => {
+    const handleUpdate = () => {
+      setPayoutsVersion((v) => v + 1);
+    };
+    window.addEventListener('campuspass_data_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    return () => {
+      window.removeEventListener('campuspass_data_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+    };
+  }, []);
+
+  // Filter events for this host: match hostId or if user is host and managing college events
+  const hostEvents = events.filter((e) => {
+    if (currentUser?.uid && e.hostId === currentUser.uid) return true;
+    if (currentUser?.role === 'host' && (!e.hostId || e.hostId === 'demo_host_uid' || !events.some(ev => ev.hostId === currentUser.uid))) {
+      return true;
+    }
+    return false;
+  });
 
   const allTickets = StorageService.getTickets();
-  const hostTickets = allTickets.filter(
-    (t) => t.hostId === currentUser?.uid || hostEvents.some(e => e.eventId === t.eventId)
-  );
+  const hostTickets = allTickets.filter((t) => {
+    if (currentUser?.uid && t.hostId === currentUser.uid) return true;
+    if (hostEvents.some((e) => e.eventId === t.eventId)) return true;
+    if (currentUser?.role === 'host' && (!t.hostId || t.hostId === 'demo_host_uid' || !allTickets.some(tk => tk.hostId === currentUser?.uid))) {
+      return true;
+    }
+    return false;
+  });
 
   // Compute Statistics
   const totalEvents = hostEvents.length;
-  const totalTicketsSold = hostEvents.reduce((acc, e) => acc + e.ticketsSold, 0);
-  const totalRevenue = hostEvents.reduce((acc, e) => acc + (e.ticketsSold * e.price), 0);
+  const totalTicketsSold = hostEvents.reduce((acc, e) => acc + (e.ticketsSold || 0), 0);
+  
+  // Real gross revenue from verified tickets or ticketsSold
+  const ticketsRevenue = hostTickets.filter(t => t.status === 'confirmed').reduce((acc, t) => acc + (t.amount || 0), 0);
+  const eventsRevenue = hostEvents.reduce((acc, e) => acc + ((e.ticketsSold || 0) * (e.price || 0)), 0);
+  const totalRevenue = Math.max(ticketsRevenue, eventsRevenue);
+
   const totalCheckedIn = hostTickets.filter(t => t.entryStatus === 'entered').length;
 
-  // Payouts & Revenue Transfers
-  const hostPayouts = StorageService.getPayouts(currentUser?.uid);
-  const totalTransferred = hostPayouts.reduce((acc, p) => acc + p.amount, 0);
+  // Payouts & Revenue Transfers (Reactive to payoutsVersion & events)
+  const hostPayouts = useMemo(() => {
+    return StorageService.getPayouts(currentUser?.uid);
+  }, [currentUser?.uid, payoutsVersion, events]);
+
+  const totalTransferred = useMemo(() => {
+    return hostPayouts.reduce((acc, p) => acc + p.amount, 0);
+  }, [hostPayouts]);
+
   const availableBalance = Math.max(0, totalRevenue - totalTransferred);
 
   // Cancellation Confirmation Modal State
@@ -125,16 +161,27 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
           </p>
         </div>
 
-        <button
-          onClick={onOpenCreateEvent}
-          className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-md hover:shadow-lg transition-all transform active:scale-95 shrink-0 self-start sm:self-auto"
-        >
-          <Plus className="w-5 h-5 stroke-[2.5]" />
-          <span>Add Event</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => onChangeTab && onChangeTab('profile')}
+            className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-white hover:bg-slate-50 text-slate-700 hover:text-indigo-600 font-bold text-sm border border-slate-200 shadow-2xs hover:shadow-xs transition-all cursor-pointer"
+            title="Organizer Profile & Institution Settings"
+          >
+            <Settings className="w-4 h-4 text-indigo-600" />
+            <span>Organizer Settings</span>
+          </button>
+          <button
+            onClick={onOpenCreateEvent}
+            className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-md hover:shadow-lg transition-all transform active:scale-95 cursor-pointer"
+          >
+            <Plus className="w-5 h-5 stroke-[2.5]" />
+            <span>Add Event</span>
+          </button>
+        </div>
       </div>
 
-      {/* Metric Cards Grid (Section 20) */}
+      {/* Metric Cards Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <div className="p-4 rounded-3xl bg-white border border-slate-200 shadow-xs">
           <div className="flex items-center justify-between text-slate-500 mb-2">
@@ -158,14 +205,21 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
           </span>
         </div>
 
-        <div className="p-4 rounded-3xl bg-white border border-slate-200 shadow-xs">
+        <div 
+          onClick={() => setIsPayoutModalOpen(true)}
+          className="p-4 rounded-3xl bg-white hover:bg-emerald-50/50 border border-slate-200 hover:border-emerald-300 shadow-xs transition cursor-pointer group"
+          title="Click to view & settle available balance"
+        >
           <div className="flex items-center justify-between text-slate-500 mb-2">
             <span className="text-[11px] font-bold uppercase tracking-wider">Total Revenue</span>
-            <IndianRupee className="w-4 h-4 text-amber-600" />
+            <IndianRupee className="w-4 h-4 text-emerald-600 group-hover:scale-110 transition" />
           </div>
           <p className="text-2xl font-black text-slate-900">₹{totalRevenue.toLocaleString()}</p>
-          <span className="text-[10px] text-amber-700 flex items-center gap-1 mt-1 font-semibold">
-            <ShieldCheck className="w-3 h-3" /> Verified UPI settled
+          <span className="text-[10px] text-emerald-700 flex items-center justify-between mt-1 font-semibold">
+            <span className="flex items-center gap-1">
+              <ShieldCheck className="w-3 h-3 text-emerald-600" /> Avail: ₹{availableBalance.toLocaleString()}
+            </span>
+            <span className="text-indigo-600 font-bold group-hover:underline">Settle →</span>
           </span>
         </div>
 
@@ -181,14 +235,14 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
         </div>
       </div>
 
-      {/* Host Quick Action Buttons (Add Event, Gate Scanner with animated QR scan, and Attendees Ledger) */}
+      {/* Host Quick Action Buttons (Add Event, Gate Scanner, and Settle Revenue) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
         {/* 1. Add Event Button */}
         <button
           onClick={onOpenCreateEvent}
-          className="p-4 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-3.5 shadow-md hover:shadow-lg transition-all transform active:scale-[0.98] text-left group"
+          className="p-4 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-3.5 shadow-md hover:shadow-lg transition-all transform active:scale-[0.98] text-left group cursor-pointer"
         >
-          <div className="w-12 h-12 rounded-xl bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-110 transition text-white">
+          <div className="w-11 h-11 rounded-xl bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-110 transition text-white">
             <Plus className="w-6 h-6 stroke-[2.5]" />
           </div>
           <div className="min-w-0">
@@ -196,44 +250,46 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
               <span>Add Event</span>
               <span className="text-indigo-200 text-xs font-bold">+</span>
             </div>
-            <p className="text-[11px] text-indigo-100/90 truncate mt-0.5">Publish new fest, workshop or pass</p>
+            <p className="text-[11px] text-indigo-100/90 truncate mt-0.5">Publish new fest or pass</p>
           </div>
         </button>
 
-        {/* 2. Gate Scanner Button with Animated QR Scan Icon */}
+        {/* 2. Gate Scanner Button */}
         <button
           onClick={onOpenScanner}
-          className="relative p-4 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 flex items-center gap-3.5 shadow-md hover:shadow-lg transition-all transform active:scale-[0.98] text-left group overflow-hidden"
+          className="relative p-4 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-slate-950 flex items-center gap-3.5 shadow-md hover:shadow-lg transition-all transform active:scale-[0.98] text-left group overflow-hidden cursor-pointer"
         >
-          {/* Subtle animated scan beam across card */}
           <span className="absolute inset-x-0 h-0.5 bg-white/60 shadow-[0_0_10px_white] animate-[pulse_2s_cubic-bezier(0.4,0,0.6,1)_infinite] top-0.5"></span>
-          
-          <div className="relative w-12 h-12 rounded-xl bg-slate-950/15 flex items-center justify-center text-slate-950 shrink-0 group-hover:scale-110 transition">
-            <QrCode className="w-6 h-6 stroke-[2.5] animate-bounce" />
+          <div className="relative w-11 h-11 rounded-xl bg-slate-950/15 flex items-center justify-center text-slate-950 shrink-0 group-hover:scale-110 transition">
+            <QrCode className="w-6 h-6 stroke-[2.5]" />
           </div>
           <div className="min-w-0">
             <div className="font-black text-sm tracking-tight flex items-center gap-1.5">
               <span>Scan Gate Passes</span>
               <span className="text-amber-950 text-xs">⚡</span>
             </div>
-            <p className="text-[11px] text-amber-950/80 truncate mt-0.5">Instant camera & manual token pass verify</p>
+            <p className="text-[11px] text-amber-950/80 truncate mt-0.5">Camera & QR gate verify</p>
           </div>
         </button>
 
-        {/* 3. Attendees Ledger Button */}
+        {/* 3. Settle Revenue Button */}
         <button
-          onClick={() => onViewAttendees()}
-          className="p-4 rounded-2xl bg-white hover:bg-slate-50 text-slate-900 border border-slate-200 hover:border-slate-300 flex items-center gap-3.5 shadow-xs hover:shadow-md transition-all transform active:scale-[0.98] text-left group"
+          onClick={() => setIsPayoutModalOpen(true)}
+          className="p-4 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white flex items-center gap-3.5 shadow-md hover:shadow-lg transition-all transform active:scale-[0.98] text-left group cursor-pointer"
         >
-          <div className="w-12 h-12 rounded-xl bg-teal-50 text-teal-700 border border-teal-200 flex items-center justify-center shrink-0 group-hover:scale-110 transition">
-            <Users className="w-6 h-6" />
+          <div className="w-11 h-11 rounded-xl bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-110 transition text-white">
+            <IndianRupee className="w-5 h-5 stroke-[2.5]" />
           </div>
-          <div className="min-w-0">
-            <div className="font-black text-sm tracking-tight flex items-center gap-1.5">
-              <span>Registered Attendees</span>
-              <span className="text-teal-600 text-xs font-bold">→</span>
+          <div className="min-w-0 flex-1">
+            <div className="font-black text-sm tracking-tight flex items-center justify-between">
+              <span>Settle Revenue</span>
+              <span className="text-xs font-bold text-emerald-200">
+                ₹{availableBalance.toLocaleString()}
+              </span>
             </div>
-            <p className="text-[11px] text-slate-500 truncate mt-0.5">View guests & verified attendance records</p>
+            <p className="text-[11px] text-emerald-100/90 truncate mt-0.5">
+              Direct instant UPI / Bank payout
+            </p>
           </div>
         </button>
       </div>
@@ -453,6 +509,121 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
               );
             })()}
           </div>
+
+          {/* DYNAMIC & REAL-TIME: Recent Revenue Settlements & Payouts (Directly on Overview Tab) */}
+          <div className="p-4 sm:p-5 rounded-3xl bg-white border border-slate-200 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center shrink-0">
+                  <IndianRupee className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">Recent Revenue Settlements & Payouts</h3>
+                  <p className="text-[11px] text-slate-500">Real-time settlement history dispatched to your Bank or UPI account</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-start sm:self-auto">
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  {hostPayouts.length} {hostPayouts.length === 1 ? 'Settlement' : 'Settlements'}
+                </span>
+                {onChangeTab && (
+                  <button
+                    onClick={() => onChangeTab('host-analytics')}
+                    className="text-xs text-indigo-600 hover:text-indigo-800 font-bold transition flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>View Revenue Tab</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {hostPayouts.length === 0 ? (
+              <div className="p-6 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                <IndianRupee className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                <p className="text-xs font-bold text-slate-600">No revenue settlements processed yet</p>
+                <p className="text-[11px] text-slate-400 mt-0.5 mb-3">
+                  Click "Settle Revenue" to transfer your available ticket earnings (₹{availableBalance.toLocaleString()}) to your UPI or Bank account.
+                </p>
+                <button
+                  onClick={() => setIsPayoutModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition shadow-2xs cursor-pointer active:scale-95"
+                >
+                  <IndianRupee className="w-3.5 h-3.5" />
+                  <span>Settle Revenue Now</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {hostPayouts.slice(0, 5).map((payout) => (
+                  <div
+                    key={payout.payoutId}
+                    className="p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100/70 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs transition"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                        {payout.method === 'UPI' ? (
+                          <Smartphone className="w-5 h-5 text-indigo-600" />
+                        ) : (
+                          <Building2 className="w-5 h-5 text-indigo-600" />
+                        )}
+                      </div>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-slate-900">{payout.destination}</span>
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black uppercase">
+                            ✓ {payout.status}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold">
+                            {payout.method === 'UPI' ? 'Instant UPI' : 'Bank IMPS'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 mt-0.5 font-mono">
+                          UTR: <span className="font-bold text-indigo-600">{payout.referenceId}</span> • {payout.accountHolderName} • {new Date(payout.timestamp).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 shrink-0">
+                      <div className="text-left sm:text-right">
+                        <span className="text-base font-black text-emerald-700">₹{payout.amount.toLocaleString()}</span>
+                        <p className="text-[10px] text-slate-400 font-mono">{payout.payoutId}</p>
+                      </div>
+
+                      {/* Invoice Show & Download Action Buttons */}
+                      <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedInvoicePayout(payout);
+                            setIsInvoiceModalOpen(true);
+                          }}
+                          className="flex-1 sm:flex-initial py-1.5 px-3 rounded-xl bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 text-indigo-700 font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-2xs active:scale-95 cursor-pointer"
+                          title="Show Full Official Invoice"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>Show Invoice</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            downloadPayoutInvoice(payout, currentUser?.college);
+                          }}
+                          className="flex-1 sm:flex-initial py-1.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition shadow-2xs active:scale-95 cursor-pointer"
+                          title="Download Tax & Remittance Invoice File"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Download</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -589,10 +760,10 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
               <div>
                 <div className="flex items-center gap-2">
                   <span className="px-2.5 py-0.5 rounded-full bg-white/20 text-emerald-100 text-[10px] font-black uppercase tracking-wider">
-                    Razorpay Settlement Gateway
+                    Direct Revenue Settlement
                   </span>
                   <span className="text-[10px] font-bold text-emerald-200 bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-400/30">
-                    Direct UPI & Bank Account
+                    Instant UPI & Bank Account
                   </span>
                 </div>
                 <h3 className="text-xl sm:text-2xl font-black mt-1.5">Transfer Revenue Directly to Host Account</h3>
@@ -613,15 +784,17 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                 <span>Zero deduction payout • Instant 24x7 IMPS / UPI dispatch</span>
               </div>
 
-              <button
-                disabled={availableBalance <= 0}
-                onClick={() => setIsPayoutModalOpen(true)}
-                className="py-3 px-5 rounded-2xl bg-white hover:bg-emerald-50 text-emerald-900 font-black text-xs transition flex items-center justify-center gap-2 shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-              >
-                <IndianRupee className="w-4 h-4 text-emerald-700" />
-                <span>Settle Revenue to UPI / Bank Now</span>
-                <ArrowRight className="w-4 h-4 text-emerald-700" />
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPayoutModalOpen(true)}
+                  className="py-3 px-5 rounded-2xl bg-white hover:bg-emerald-50 text-emerald-900 font-black text-xs transition flex items-center justify-center gap-2 shadow-md active:scale-95 cursor-pointer"
+                >
+                  <IndianRupee className="w-4 h-4 text-emerald-700" />
+                  <span>Settle Revenue to UPI / Bank Now</span>
+                  <ArrowRight className="w-4 h-4 text-emerald-700" />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -686,7 +859,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                             ✓ {payout.status}
                           </span>
                           <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold">
-                            {payout.gateway || 'Razorpay Payout'}
+                            {payout.method === 'UPI' ? 'Instant UPI' : 'Bank IMPS'}
                           </span>
                         </div>
                         <p className="text-[11px] text-slate-500 mt-0.5 font-mono">
@@ -800,6 +973,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
         }}
         hostCollege={currentUser?.college}
       />
+
 
       {/* Confirmation Modal: Cancel Event */}
       {eventToCancel && (

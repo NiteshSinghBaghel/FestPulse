@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { PayoutRecord } from '../types';
 import { PaymentService } from '../services/paymentService';
@@ -51,6 +51,22 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
   const [processingStatus, setProcessingStatus] = useState('Initiating Settlement Gateway...');
   const [completedPayout, setCompletedPayout] = useState<PayoutRecord | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
+
+  // Synchronize amount and reset states when modal is opened or balance updates
+  useEffect(() => {
+    if (isOpen) {
+      setAmount(availableBalance > 0 ? availableBalance : 0);
+      setCompletedPayout(null);
+      setErrorMessage('');
+      setIsProcessing(false);
+      if (currentUser?.phone) {
+        setUpiId(`${currentUser.phone.replace(/\D/g, '')}@upi`);
+      }
+      if (currentUser?.name) {
+        setAccountHolderName(currentUser.name);
+      }
+    }
+  }, [isOpen, availableBalance, currentUser]);
 
   if (!isOpen) return null;
 
@@ -106,7 +122,7 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
       setProcessingStatus('Clearing via Bank IMPS Network...');
 
       const result = await PaymentService.processHostPayout({
-        hostId: currentUser?.uid || '',
+        hostId: currentUser?.uid || 'demo_host_uid',
         hostName: currentUser?.name || 'Event Host',
         amount: Number(amount),
         method: transferMethod,
@@ -152,7 +168,7 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
         {/* Header */}
         <div className="pr-8 pb-3 border-b border-slate-100 shrink-0">
           <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-black uppercase tracking-wider mb-1.5">
-            <Sparkles className="w-3 h-3 text-emerald-600" /> Razorpay Payout & Settlement Gateway
+            <Sparkles className="w-3 h-3 text-emerald-600" /> Direct Revenue Settlement
           </div>
           <h2 className="text-xl sm:text-2xl font-black text-slate-900">
             {completedPayout ? 'Settlement Successful! 🎉' : 'Host Revenue Settlement'}
@@ -179,7 +195,7 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
                 ₹{completedPayout.amount.toLocaleString()}
               </span>
               <p className="text-xs text-slate-500 mt-1">
-                Dispatched via Razorpay Payout Gateway ({completedPayout.method === 'UPI' ? 'Instant UPI VPA' : 'Bank IMPS Direct'})
+                Dispatched via Instant Settlement Network ({completedPayout.method === 'UPI' ? 'Instant UPI VPA' : 'Bank IMPS Direct'})
               </p>
             </div>
 
@@ -261,12 +277,26 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
               </div>
               <button
                 type="button"
+                disabled={availableBalance <= 0}
                 onClick={() => setAmount(availableBalance)}
-                className="py-1.5 px-3 rounded-xl bg-white border border-emerald-300 text-emerald-800 font-bold text-xs hover:bg-emerald-100 transition shadow-2xs cursor-pointer"
+                className="py-1.5 px-3 rounded-xl bg-white border border-emerald-300 text-emerald-800 font-bold text-xs hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-2xs cursor-pointer"
               >
                 Settle Full Balance
               </button>
             </div>
+
+            {/* Zero Balance Notice */}
+            {availableBalance <= 0 && (
+              <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold block">No Pending Settlement Balance</span>
+                  <span className="text-[11px] text-amber-800">
+                    Your current available balance is ₹0. When students purchase paid event passes, ticket collections will be credited here and become available for instant settlement to your UPI or Bank account.
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Error banner if any */}
             {errorMessage && (
@@ -483,7 +513,7 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
             <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-100 flex items-center justify-between text-[11px] text-indigo-700">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 shrink-0 text-emerald-600" />
-                <span>Zero deduction payout • Powered by Razorpay Settlement Gateway</span>
+                <span>Zero deduction payout • Instant 24x7 IMPS / UPI Dispatch</span>
               </div>
               <span className="font-mono text-[10px] text-slate-400 font-semibold">24x7 IMPS</span>
             </div>

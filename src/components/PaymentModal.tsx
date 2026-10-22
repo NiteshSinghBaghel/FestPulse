@@ -22,9 +22,7 @@ import {
   Calendar,
   MapPin,
   RefreshCw,
-  Zap,
-  ExternalLink,
-  CreditCard
+  Zap
 } from 'lucide-react';
 
 interface PaymentModalProps {
@@ -34,7 +32,7 @@ interface PaymentModalProps {
   onSuccess: (ticket: Ticket) => void;
 }
 
-type StepType = 'form' | 'test_gateway' | 'processing' | 'verifying' | 'success' | 'failed';
+type StepType = 'form' | 'processing' | 'verifying' | 'success' | 'failed';
 
 export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClose, onSuccess }) => {
   const { currentUser } = useAuth();
@@ -61,7 +59,6 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
   // Payment State
   const [step, setStep] = useState<StepType>('form');
   const [errorMessage, setErrorMessage] = useState('');
-  const [selectedMethod, setSelectedMethod] = useState<'UPI' | 'CARD' | 'NETBANKING'>('UPI');
   const [generatedTicket, setGeneratedTicket] = useState<Ticket | null>(null);
 
   // Canvas for dynamic Pass QR rendering on success
@@ -261,7 +258,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
         },
         onError: (err: any) => {
           console.error('Razorpay payment error:', err);
-          const desc = typeof err === 'string' ? err : err?.description || err?.message || 'Payment was cancelled or failed.';
+          const desc = typeof err === 'string' ? err : err?.description || err?.message || 'Payment was cancelled or failed on gateway.';
           setErrorMessage(desc);
           setStep('failed');
         }
@@ -273,125 +270,13 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
     }
   };
 
-  // Direct Instant UPI Checkout (100% Reliable Gateway Fallback)
-  const handleDirectInstantPayment = async () => {
-    if (!currentUser) {
-      alert('Please log in first to purchase tickets.');
-      return;
-    }
-    if (!validateForm()) {
-      return;
-    }
-
-    try {
-      setStep('verifying');
-      setErrorMessage('');
-
-      const order = await PaymentService.createPaymentOrder(event.eventId, {
-        amountInRupees: totalAmount,
-        studentName: fullName.trim(),
-        studentEmail: email.trim(),
-        studentPhone: phone.trim(),
-        quantity: ticketQuantity,
-      });
-
-      const upiPaymentId = `upi_pay_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const verification = await PaymentService.verifyPayment({
-        orderId: order.orderId,
-        paymentId: upiPaymentId,
-        eventId: event.eventId,
-        userId: currentUser.uid,
-        userName: fullName.trim(),
-        userEmail: email.trim(),
-        phone: phone.trim(),
-        college: collegeName.trim(),
-        rollNo: rollNo.trim(),
-        quantity: ticketQuantity,
-        upiVpa: `${phone.replace(/\D/g, '')}@upi`,
-        signatureChallenge: order.signatureChallenge,
-      });
-
-      if (verification.success && verification.ticket) {
-        setGeneratedTicket(verification.ticket);
-        setStep('success');
-        confetti({
-          particleCount: 120,
-          spread: 80,
-          origin: { y: 0.6 }
-        });
-        onSuccess(verification.ticket);
-      } else {
-        setErrorMessage(verification.message || 'Payment verification failed.');
-        setStep('failed');
-      }
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Error processing payment.');
-      setStep('failed');
-    }
-  };
-
-  // Handle test payment simulation
-  const handleCompleteTestPayment = async (method: string = 'UPI') => {
-    if (!currentUser) {
-      alert('Please log in first to purchase tickets.');
-      return;
-    }
-
-    try {
-      setStep('verifying');
-      setErrorMessage('');
-
-      const order = await PaymentService.createPaymentOrder(event.eventId, {
-        amountInRupees: totalAmount,
-        studentName: fullName.trim(),
-        studentEmail: email.trim(),
-        studentPhone: phone.trim(),
-        quantity: ticketQuantity,
-      });
-
-      const testPaymentId = `pay_test_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const verification = await PaymentService.verifyPayment({
-        orderId: order.orderId,
-        paymentId: testPaymentId,
-        eventId: event.eventId,
-        userId: currentUser.uid,
-        userName: fullName.trim(),
-        userEmail: email.trim(),
-        phone: phone.trim(),
-        college: collegeName.trim(),
-        rollNo: rollNo.trim(),
-        quantity: ticketQuantity,
-        upiVpa: method === 'UPI' ? `${phone.replace(/\D/g, '')}@razorpay` : `${method.toLowerCase()}@sandbox`,
-        signatureChallenge: order.signatureChallenge,
-        razorpaySignature: `sig_test_${Date.now()}`,
-      });
-
-      if (verification.success && verification.ticket) {
-        setGeneratedTicket(verification.ticket);
-        setStep('success');
-        confetti({
-          particleCount: 120,
-          spread: 80,
-          origin: { y: 0.6 }
-        });
-        onSuccess(verification.ticket);
-      } else {
-        setErrorMessage(verification.message || 'Payment verification failed.');
-        setStep('failed');
-      }
-    } catch (err: any) {
-      setErrorMessage(err?.message || 'Error processing test payment.');
-      setStep('failed');
-    }
-  };
-
-  // Primary action click
+  // Primary action click: Directly redirects to real Razorpay Payment Gateway & generates pass on verified payment!
   const handlePayClick = () => {
     if (totalAmount === 0) {
       handleFreePassIssuance();
     } else {
       if (!validateForm()) return;
-      setStep('test_gateway');
+      handleRazorpayGatewayRedirect();
     }
   };
 
@@ -657,7 +542,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
             </div>
 
             {/* Direct Pay Action */}
-            <div className="p-4 sm:p-5 bg-white border-t border-slate-100 shrink-0 space-y-2">
+            <div className="p-4 sm:p-5 bg-white border-t border-slate-100 shrink-0 space-y-2.5">
               <button
                 type="button"
                 onClick={handlePayClick}
@@ -672,7 +557,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
                 ) : (
                   <>
                     <Lock className="w-4 h-4 text-emerald-300 group-hover:scale-110 transition" />
-                    <span>Pay ₹{totalAmount}</span>
+                    <span>Pay ₹{totalAmount} via Razorpay Gateway</span>
                     <ArrowRight className="w-5 h-5 group-hover:translate-x-0.5 transition" />
                   </>
                 )}
@@ -691,178 +576,6 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
           </div>
         )}
 
-        {/* ================= STEP: RAZORPAY TEST GATEWAY ================= */}
-        {step === 'test_gateway' && (
-          <div className="flex flex-col bg-white overflow-y-auto max-h-[85vh]">
-            {/* Razorpay Test Header */}
-            <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 border-b border-indigo-500/20 relative overflow-hidden shrink-0">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center font-black text-white text-base shadow-sm">
-                    R
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-black text-sm tracking-wide text-white">Razorpay</span>
-                      <span className="px-2 py-0.5 rounded-md bg-amber-400/20 text-amber-300 text-[10px] font-black uppercase tracking-wider border border-amber-400/30">
-                        TEST MODE
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-300">Fest-Plus Payment Gateway Sandbox</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Payable Amount</span>
-                  <span className="text-xl font-black text-emerald-400">₹{totalAmount}</span>
-                </div>
-              </div>
-
-              {/* Event & Student Strip */}
-              <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-xs text-slate-300">
-                <span className="truncate font-semibold max-w-[220px]">{event.title}</span>
-                <span className="text-slate-400 text-[11px]">{ticketQuantity} Pass{ticketQuantity > 1 ? 'es' : ''} • {fullName}</span>
-              </div>
-            </div>
-
-            {/* Test Payment Methods Selection */}
-            <div className="p-5 space-y-4">
-              <div className="bg-amber-50 rounded-2xl p-3 border border-amber-200/80 flex items-start gap-2.5 text-xs text-amber-900">
-                <Zap className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-bold block">Razorpay Test Gateway Active</span>
-                  <span className="text-[11px] text-amber-800">
-                    Yeh test mode payment hai. Koi real money deduct nahi hogi. Niche kisi bhi option se test pass generate karein.
-                  </span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                  Select Test Payment Method
-                </label>
-
-                {/* UPI Test Option */}
-                <div 
-                  onClick={() => setSelectedMethod('UPI')}
-                  className={`p-3.5 rounded-2xl border transition cursor-pointer flex items-center justify-between ${
-                    selectedMethod === 'UPI' 
-                      ? 'border-indigo-600 bg-indigo-50/50 shadow-xs' 
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">
-                      UPI
-                    </div>
-                    <div>
-                      <span className="font-bold text-sm text-slate-900 block">UPI Simulation</span>
-                      <span className="text-xs text-slate-500">Google Pay, PhonePe, Paytm, BHIM</span>
-                    </div>
-                  </div>
-                  <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${
-                    selectedMethod === 'UPI' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
-                  }`}>
-                    {selectedMethod === 'UPI' && <CheckCircle2 className="w-3.5 h-3.5" />}
-                  </div>
-                </div>
-
-                {/* Cards Test Option */}
-                <div 
-                  onClick={() => setSelectedMethod('CARD')}
-                  className={`p-3.5 rounded-2xl border transition cursor-pointer flex items-center justify-between ${
-                    selectedMethod === 'CARD' 
-                      ? 'border-indigo-600 bg-indigo-50/50 shadow-xs' 
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-xs">
-                      CARD
-                    </div>
-                    <div>
-                      <span className="font-bold text-sm text-slate-900 block">Test Card (Visa/Mastercard)</span>
-                      <span className="text-xs text-slate-500">4111 •••• •••• 1111 (Auto-passed)</span>
-                    </div>
-                  </div>
-                  <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${
-                    selectedMethod === 'CARD' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
-                  }`}>
-                    {selectedMethod === 'CARD' && <CheckCircle2 className="w-3.5 h-3.5" />}
-                  </div>
-                </div>
-
-                {/* NetBanking Test Option */}
-                <div 
-                  onClick={() => setSelectedMethod('NETBANKING')}
-                  className={`p-3.5 rounded-2xl border transition cursor-pointer flex items-center justify-between ${
-                    selectedMethod === 'NETBANKING' 
-                      ? 'border-indigo-600 bg-indigo-50/50 shadow-xs' 
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-bold text-xs">
-                      NET
-                    </div>
-                    <div>
-                      <span className="font-bold text-sm text-slate-900 block">Test NetBanking</span>
-                      <span className="text-xs text-slate-500">HDFC, SBI, ICICI, Axis Bank Sandbox</span>
-                    </div>
-                  </div>
-                  <div className={`w-5 h-5 rounded-full border flex items-center justify-center ${
-                    selectedMethod === 'NETBANKING' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
-                  }`}>
-                    {selectedMethod === 'NETBANKING' && <CheckCircle2 className="w-3.5 h-3.5" />}
-                  </div>
-                </div>
-              </div>
-
-              {/* Simulation Action Buttons */}
-              <div className="pt-2 space-y-2.5">
-                <button
-                  type="button"
-                  onClick={() => handleCompleteTestPayment(selectedMethod)}
-                  className="w-full py-3.5 px-4 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white font-black text-sm flex items-center justify-center gap-2 shadow-md transition transform active:scale-[0.98] cursor-pointer"
-                >
-                  <Zap className="w-4 h-4 fill-white" />
-                  <span>Simulate Successful Payment (₹{totalAmount})</span>
-                </button>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setErrorMessage('Test simulation: Payment was cancelled by user on gateway.');
-                      setStep('failed');
-                    }}
-                    className="py-2.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs border border-rose-200 transition cursor-pointer"
-                  >
-                    Simulate Failure
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setStep('form')}
-                    className="py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs border border-slate-200 transition cursor-pointer"
-                  >
-                    Back to Form
-                  </button>
-                </div>
-
-                <div className="text-center pt-1 flex items-center justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleRazorpayGatewayRedirect}
-                    className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <span>Launch Razorpay Standard Popup</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
         {(step === 'processing' || step === 'verifying') && (
           <div className="py-16 text-center flex flex-col items-center bg-white px-6">
             <div className="relative">
@@ -1009,16 +722,6 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
             </p>
 
             <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-2.5">
-              {totalAmount > 0 && (
-                <button
-                  onClick={handleDirectInstantPayment}
-                  className="w-full sm:w-auto py-2.5 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
-                >
-                  <Lock className="w-3.5 h-3.5" />
-                  <span>Pay via Instant UPI</span>
-                </button>
-              )}
-
               <button
                 onClick={handlePayClick}
                 className="w-full sm:w-auto py-2.5 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"

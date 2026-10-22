@@ -68,7 +68,30 @@ export class StorageService {
         this.saveTickets(fbTickets || []);
         this.savePayments(fbPayments || []);
         this.saveRegisteredAccounts(fbAccounts || []);
-        this.savePayouts(fbPayouts || []);
+        
+        // Payouts: Merge cloud and local payouts so settlements are never reset or lost
+        const localPayouts = this.getPayouts();
+        const payoutMap = new Map<string, PayoutRecord>();
+        for (const p of localPayouts) {
+          if (p && p.payoutId) payoutMap.set(p.payoutId, p);
+        }
+        for (const p of (fbPayouts || [])) {
+          if (p && p.payoutId) payoutMap.set(p.payoutId, p);
+        }
+        const mergedPayouts = Array.from(payoutMap.values()).sort(
+          (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+        );
+        this.savePayouts(mergedPayouts);
+
+        // Upload any local settlements missing from Firestore to keep cloud database authoritative
+        if (fbPayouts && Array.isArray(fbPayouts)) {
+          const cloudIds = new Set(fbPayouts.map(p => p.payoutId));
+          for (const lp of localPayouts) {
+            if (!cloudIds.has(lp.payoutId)) {
+              FirebaseDbService.savePayout(lp).catch(() => {});
+            }
+          }
+        }
 
         return {
           eventsCount: (fbEvents || []).length,
@@ -86,7 +109,13 @@ export class StorageService {
           if (Array.isArray(syncData.events)) this.saveEvents(syncData.events);
           if (Array.isArray(syncData.tickets)) this.saveTickets(syncData.tickets);
           if (Array.isArray(syncData.accounts)) this.saveRegisteredAccounts(syncData.accounts);
-          if (Array.isArray(syncData.payouts)) this.savePayouts(syncData.payouts);
+          if (Array.isArray(syncData.payouts) && syncData.payouts.length > 0) {
+            const current = this.getPayouts();
+            const pMap = new Map<string, PayoutRecord>();
+            current.forEach(p => pMap.set(p.payoutId, p));
+            syncData.payouts.forEach((p: PayoutRecord) => pMap.set(p.payoutId, p));
+            this.savePayouts(Array.from(pMap.values()));
+          }
         }
       } catch {
         // safe fallback
@@ -524,13 +553,8 @@ export class StorageService {
     if (!raw) return [];
     try {
       const parsed: RegisteredAccount[] = JSON.parse(raw);
-      // Clean out any legacy demo accounts
-      const cleaned = parsed.filter(a => 
-        a.email && 
-        !a.email.includes('@campus.edu') && 
-        !a.email.includes('host@campus') && 
-        !a.email.includes('student@campus')
-      );
+      // Keep all valid registered accounts, never delete host or student accounts
+      const cleaned = parsed.filter(a => a && a.email && typeof a.email === 'string');
       if (cleaned.length !== parsed.length) {
         this.saveRegisteredAccounts(cleaned);
       }
@@ -581,21 +605,67 @@ export class StorageService {
     return undefined;
   }
 
-  static findAccountByEmail(email: string): RegisteredAccount | undefined {
+  static findAccountByIdentifier(identifier: string): RegisteredAccount | undefined {
+    if (!identifier) return undefined;
+    const clean = identifier.trim().toLowerCase();
+    const cleanDigits = identifier.replace(/[\s\-()+]/g, '');
     const accounts = this.getRegisteredAccounts();
-    return accounts.find(a => a.email.toLowerCase().trim() === email.toLowerCase().trim());
+    return accounts.find(a => 
+      (a.email && a.email.toLowerCase().trim() === clean) ||
+      (cleanDigits.length >= 10 && a.phone && a.phone.replace(/[\s\-()+]/g, '') === cleanDigits)
+    );
   }
 
-  static async findAccountByEmailAsync(email: string): Promise<RegisteredAccount | undefined> {
-    const cleanEmail = email.toLowerCase().trim();
+  static findAccountByEmail(email: string): RegisteredAccount | undefined {
+    return this.findAccountByIdentifier(email);
+  }
+
+  static async findAccountByIdentifierAsync(identifier: string, forceFresh = false): Promise<RegisteredAccount | undefined> {
+    if (!identifier) return undefined;
+    const clean = identifier.trim().toLowerCase();
+    const cleanDigits = identifier.replace(/[\s\-()+]/g, '');
+
+    const matcher = (a: RegisteredAccount) => {
+      if (!a) return false;
+      const aEmail = a.email ? a.email.toLowerCase().trim() : '';
+      const aPhone = a.phone ? a.phone.replace(/[\s\-()+]/g, '') : '';
+      return (clean && aEmail === clean) || (cleanDigits.length >= 10 && aPhone === cleanDigits);
+    };
+
+    // If fresh check requested (e.g. on login or post-edit), check persistent server & cloud first!
+    if (forceFresh) {
+      try {
+        const res = await fetch('/api/accounts');
+        if (res.ok) {
+          const accounts: RegisteredAccount[] = await res.json();
+          if (Array.isArray(accounts)) {
+            const found = accounts.find(matcher);
+            if (found) {
+              this.saveAccount(found);
+              return found;
+            }
+          }
+        }
+      } catch {}
+
+      try {
+        const fbAccounts = await FirebaseDbService.getAccounts();
+        const found = fbAccounts.find(matcher);
+        if (found) {
+          this.saveAccount(found);
+          return found;
+        }
+      } catch {}
+    }
+
     // 1. Check local storage
-    const local = this.findAccountByEmail(cleanEmail);
-    if (local) return local;
+    const local = this.findAccountByIdentifier(identifier);
+    if (local && !forceFresh) return local;
 
     // 2. Check Firestore cloud database directly
     try {
       const fbAccounts = await FirebaseDbService.getAccounts();
-      const found = fbAccounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
+      const found = fbAccounts.find(matcher);
       if (found) {
         this.saveAccount(found);
         return found;
@@ -608,7 +678,7 @@ export class StorageService {
       if (res.ok) {
         const accounts: RegisteredAccount[] = await res.json();
         if (Array.isArray(accounts)) {
-          const found = accounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
+          const found = accounts.find(matcher);
           if (found) {
             this.saveAccount(found);
             return found;
@@ -619,7 +689,107 @@ export class StorageService {
       // safe fallback
     }
 
+    // Fallback to local if server was temporarily unavailable
+    if (local) return local;
+
+    // 4. Default demo accounts
+    if (clean === 'host@campusfest.org' || (cleanDigits && cleanDigits === '9876543210' && clean.includes('host'))) {
+      return {
+        uid: 'demo_host_uid',
+        email: 'host@campusfest.org',
+        name: 'Cultural Committee Head',
+        role: 'host',
+        college: 'IIT Delhi Event Council',
+        phone: '9876543210',
+        authProvider: 'email',
+        createdAt: new Date().toISOString(),
+      };
+    }
+    if (clean === 'student@college.edu' || (cleanDigits && cleanDigits === '9876543210' && !clean.includes('host'))) {
+      return {
+        uid: 'demo_user_uid',
+        email: 'student@college.edu',
+        name: 'Aarav Sharma',
+        role: 'user',
+        college: 'IIT Delhi (CS Dept)',
+        phone: '9876543210',
+        authProvider: 'email',
+        createdAt: new Date().toISOString(),
+      };
+    }
+
     return undefined;
+  }
+
+  static async findAccountByEmailAsync(email: string, forceFresh = false): Promise<RegisteredAccount | undefined> {
+    return this.findAccountByIdentifierAsync(email, forceFresh);
+  }
+
+  static async updateAccountPasswordAsync(
+    email: string, 
+    newPassword: string, 
+    role?: string, 
+    name?: string
+  ): Promise<RegisteredAccount> {
+    const cleanEmail = email.toLowerCase().trim();
+    const accounts = this.getRegisteredAccounts();
+    const idx = accounts.findIndex(a => a.email && a.email.toLowerCase().trim() === cleanEmail);
+    let updatedAccount: RegisteredAccount;
+
+    if (idx >= 0) {
+      accounts[idx].password = newPassword;
+      accounts[idx].updatedAt = new Date().toISOString();
+      if (role) accounts[idx].role = role as any;
+      if (name) accounts[idx].name = name;
+      updatedAccount = accounts[idx];
+    } else {
+      updatedAccount = {
+        uid: `usr_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`,
+        name: name || cleanEmail.split('@')[0],
+        email: cleanEmail,
+        password: newPassword,
+        role: (role as any) || 'user',
+        college: role === 'host' ? 'Campus Event Council' : 'College Student',
+        phone: '',
+        authProvider: 'email',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      accounts.push(updatedAccount);
+    }
+    this.saveRegisteredAccounts(accounts);
+
+    // 1. Sync to server API /api/auth/update-password and /api/accounts
+    try {
+      await fetch('/api/auth/update-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: cleanEmail,
+          newPassword,
+          role: updatedAccount.role,
+          name: updatedAccount.name,
+          uid: updatedAccount.uid,
+        }),
+      });
+      await fetch('/api/accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedAccount),
+      });
+    } catch (e) {
+      console.warn('updateAccountPasswordAsync API warning:', e);
+    }
+
+    // 2. Sync directly to Firestore
+    try {
+      await FirebaseDbService.updateAccountPassword(cleanEmail, newPassword);
+      await FirebaseDbService.saveAccount(updatedAccount);
+    } catch (e) {
+      console.warn('updateAccountPasswordAsync Firestore warning:', e);
+    }
+
+    return updatedAccount;
   }
 
   static saveAccount(account: RegisteredAccount): void {
@@ -731,6 +901,48 @@ export class StorageService {
       console.warn('Local tickets update warning:', e);
     }
 
+    // Update host events locally if host name or phone changed
+    try {
+      const events = this.getEvents();
+      let eventsChanged = false;
+      const updatedEvents = events.map(evt => {
+        if (evt.hostId === userId || evt.hostId === updatedAccount.uid) {
+          eventsChanged = true;
+          return {
+            ...evt,
+            hostName: updates.name.trim(),
+            hostPhone: updates.phone?.trim() || evt.hostPhone,
+          };
+        }
+        return evt;
+      });
+      if (eventsChanged) {
+        this.saveEvents(updatedEvents);
+      }
+    } catch (e) {
+      console.warn('Local events update warning:', e);
+    }
+
+    // Sync active session in localStorage
+    try {
+      const rawUser = localStorage.getItem('auth_user');
+      if (rawUser) {
+        const u = JSON.parse(rawUser);
+        if (u && (u.uid === userId || (u.email && u.email.toLowerCase().trim() === cleanOldEmail))) {
+          const syncedUser = {
+            ...u,
+            name: updates.name.trim(),
+            email: cleanNewEmail,
+            phone: updates.phone !== undefined ? updates.phone.trim() : u.phone,
+            college: updates.college !== undefined ? updates.college.trim() : u.college,
+            photoURL: updates.photoURL || u.photoURL,
+            updatedAt: new Date().toISOString(),
+          };
+          localStorage.setItem('auth_user', JSON.stringify(syncedUser));
+        }
+      }
+    } catch {}
+
     // 1. Sync to server API (pass oldEmail so backend can update Postgres/memory)
     try {
       await fetch('/api/accounts', {
@@ -776,10 +988,16 @@ export class StorageService {
     if (!raw) return [];
     try {
       const parsed: PayoutRecord[] = JSON.parse(raw);
-      if (hostId) {
-        return parsed.filter(p => p.hostId === hostId);
+      // Clean out legacy mock dummy payout of 1500
+      const cleaned = parsed.filter(p => p.payoutId !== 'pout_rzp_mv5dyagx_TTD1' && p.payoutId !== 'pout_rzp_mv8cukhu_V3LA');
+      if (cleaned.length !== parsed.length) {
+        localStorage.setItem(STORAGE_KEYS.PAYOUTS, JSON.stringify(cleaned));
       }
-      return parsed;
+      if (hostId) {
+        // Return payouts for this host, including any demo host or unassigned payouts so history is never lost
+        return cleaned.filter(p => !p.hostId || p.hostId === hostId || p.hostId === 'demo_host_uid' || hostId === 'demo_host_uid');
+      }
+      return cleaned;
     } catch {
       return [];
     }
@@ -787,12 +1005,23 @@ export class StorageService {
 
   static savePayouts(payouts: PayoutRecord[]): void {
     localStorage.setItem(STORAGE_KEYS.PAYOUTS, JSON.stringify(payouts));
+    try {
+      window.dispatchEvent(new Event('campuspass_data_updated'));
+    } catch {}
   }
 
   static savePayoutRecord(payout: PayoutRecord): void {
     const payouts = this.getPayouts();
-    payouts.unshift(payout);
+    const existingIdx = payouts.findIndex(p => p.payoutId === payout.payoutId);
+    if (existingIdx > -1) {
+      payouts[existingIdx] = payout;
+    } else {
+      payouts.unshift(payout);
+    }
     this.savePayouts(payouts);
+
+    // Sync to Firestore Cloud database immediately
+    FirebaseDbService.savePayout(payout).catch(e => console.warn('Cloud savePayout error:', e));
 
     fetch('/api/payouts', {
       method: 'POST',

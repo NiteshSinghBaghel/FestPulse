@@ -27,6 +27,7 @@ export interface RegisteredAccount {
   photoURL?: string;
   authProvider: 'email' | 'google';
   createdAt: string;
+  updatedAt?: string;
 }
 
 export type EventStatus = 'draft' | 'published' | 'sold_out' | 'cancelled' | 'completed';
@@ -130,7 +131,7 @@ export interface PayoutRecord {
   status: 'completed' | 'processing' | 'pending' | 'failed';
   referenceId: string; // Bank UTR or IMPS reference
   gatewayRef?: string; // Razorpay Payout ID (pout_...)
-  gateway?: 'RAZORPAY_PAYOUT' | 'IMPS_DIRECT' | 'UPI_INSTANT';
+  gateway?: 'RAZORPAY_PAYOUT' | 'IMPS_DIRECT' | 'UPI_INSTANT' | 'INSTANT_PAYOUT';
   timestamp: string;
   notes?: string;
 }

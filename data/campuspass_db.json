@@ -1,12 +1,233 @@
 {
-  "events": [],
-  "tickets": [],
-  "accounts": [],
-  "payouts": [],
+  "events": [
+    {
+      "hostId": "demo_host_uid",
+      "hostName": "IIT Delhi Cultural Secretary (Updated)",
+      "title": "E SPORT",
+      "description": "WERTYU",
+      "imageUrl": "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=1000&auto=format&fit=crop&q=80",
+      "date": "2026-10-15",
+      "startTime": "10:00 AM",
+      "endTime": "05:00 PM",
+      "location": "Main Campus, Block C",
+      "venue": "Seminar Hall 1",
+      "price": 149,
+      "currency": "INR",
+      "capacity": 200,
+      "status": "published",
+      "category": "Gaming",
+      "hostPhone": "9876543210",
+      "rules": [
+        "College ID required",
+        "No late entries past 11:30 AM"
+      ],
+      "amenities": [
+        "Free Refreshments",
+        "Wi-Fi Access",
+        "Digital Certificate"
+      ],
+      "eventId": "evt-mv5ehiag-45lc",
+      "ticketsSold": 2,
+      "availableTickets": 198,
+      "createdAt": "2026-10-12T15:22:04.888Z",
+      "updatedAt": "2026-10-12T15:22:58.023Z"
+    }
+  ],
+  "tickets": [
+    {
+      "ticketId": "TKT-37673317",
+      "eventId": "evt-mv5ehiag-45lc",
+      "eventTitle": "E SPORT",
+      "eventDate": "2026-10-15",
+      "eventTime": "10:00 AM",
+      "eventVenue": "Seminar Hall 1, Main Campus, Block C",
+      "eventImageUrl": "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=1000&auto=format&fit=crop&q=80",
+      "userId": "demo_user_uid",
+      "userName": "Aarav Sharma",
+      "userEmail": "student@college.edu",
+      "phone": "9876543210",
+      "college": "IIT Delhi (CS Dept)",
+      "rollNo": "CS23B041",
+      "quantity": 1,
+      "hostId": "demo_host_uid",
+      "hostPhone": "9876543210",
+      "paymentId": "pay_test_1791818577906_hrkga",
+      "orderId": "order_Tn2q6VvoTMFl0j",
+      "amount": 149,
+      "currency": "INR",
+      "status": "confirmed",
+      "qrToken": "SEC-TK-TKT-37673317-UZAHMEKE",
+      "qrHash": "sha256_1791818577907_p2432k7sp8",
+      "issuedAt": "2026-10-12T15:22:57.907Z",
+      "entryStatus": "not_entered",
+      "exitStatus": "not_exited"
+    },
+    {
+      "ticketId": "TKT-30326247",
+      "eventId": "evt-mv5ehiag-45lc",
+      "eventTitle": "E SPORT",
+      "eventDate": "2026-10-15",
+      "eventTime": "10:00 AM",
+      "eventVenue": "Seminar Hall 1, Main Campus, Block C",
+      "eventImageUrl": "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=1000&auto=format&fit=crop&q=80",
+      "userId": "demo_user_uid",
+      "userName": "Aarav Sharma",
+      "userEmail": "student@college.edu",
+      "phone": "9876543210",
+      "college": "IIT Delhi (CS Dept)",
+      "rollNo": "CS23B041",
+      "quantity": 1,
+      "hostId": "demo_host_uid",
+      "hostPhone": "9876543210",
+      "paymentId": "pay_test_1791818568183_q1wpd",
+      "orderId": "order_Tn2pvtuZWUYqxN",
+      "amount": 149,
+      "currency": "INR",
+      "status": "confirmed",
+      "qrToken": "SEC-TK-TKT-30326247-ETR3UBD8",
+      "qrHash": "sha256_1791818568188_jcwqz9km9u",
+      "issuedAt": "2026-10-12T15:22:48.189Z",
+      "entryStatus": "not_entered",
+      "exitStatus": "not_exited"
+    }
+  ],
+  "accounts": [
+    {
+      "uid": "demo_user_uid",
+      "name": "Aarav Sharma",
+      "email": "student@college.edu",
+      "role": "user",
+      "college": "IIT Delhi (CS Dept)",
+      "phone": "9876543210",
+      "photoURL": "https://api.dicebear.com/7.x/bottts/svg?seed=Aarav%20Sharma",
+      "authProvider": "google",
+      "createdAt": "2026-10-10T16:54:43.861Z",
+      "password": "StudentNewPass2026!",
+      "updatedAt": "2026-10-21T14:08:16.360Z"
+    },
+    {
+      "uid": "demo_host_uid",
+      "name": "IIT Delhi Cultural Secretary (Updated)",
+      "email": "host@campusfest.org",
+      "role": "host",
+      "college": "IIT Delhi Council of Cultural Activities",
+      "phone": "9876543210",
+      "photoURL": "https://api.dicebear.com/7.x/bottts/svg?seed=Cultural%20Committee%20Head",
+      "authProvider": "google",
+      "createdAt": "2026-10-12T15:21:24.481Z",
+      "password": "HostNewPass2026!",
+      "updatedAt": "2026-10-21T14:08:16.366Z"
+    },
+    {
+      "uid": "usr_mvi6t981_a2o34",
+      "name": "Eshu Singh",
+      "email": "eshusingh62@gmail.com",
+      "role": "user",
+      "college": "",
+      "phone": "",
+      "photoURL": "",
+      "authProvider": "email",
+      "password": "EshuUpdatedPass2026!",
+      "createdAt": "2026-10-21T14:08:16.369Z",
+      "updatedAt": "2026-10-21T14:08:16.372Z"
+    },
+    {
+      "uid": "usr_test_1792673751386",
+      "name": "Test Mobile Student",
+      "email": "testmobile1792673751386@test.edu",
+      "password": "Password123!",
+      "role": "user",
+      "college": "College Student",
+      "phone": "9876543211",
+      "createdAt": "2026-10-22T12:55:51.386Z"
+    }
+  ],
+  "payouts": [
+    {
+      "payoutId": "pout_rzp_mv8d319z_H056",
+      "hostId": "demo_host_uid",
+      "hostName": "Cultural Committee",
+      "amount": 100,
+      "currency": "INR",
+      "method": "UPI",
+      "destination": "organizer@okaxis",
+      "accountHolderName": "Cultural Committee",
+      "status": "completed",
+      "referenceId": "RZPUTR637577272957",
+      "gatewayRef": "pout_rzp_mv8d319z_H056",
+      "gateway": "RAZORPAY_PAYOUT",
+      "timestamp": "2026-10-14T17:06:09.170Z",
+      "notes": "Host on-demand revenue settlement via Razorpay UPI",
+      "isLive": false
+    }
+  ],
+  "payments": [
+    {
+      "paymentId": "pay_test_987",
+      "orderId": "order_test_123",
+      "amount": 499,
+      "status": "captured",
+      "method": "upi_razorpay",
+      "vpa": null,
+      "bank": null,
+      "eventId": "evt_test_1",
+      "userId": "",
+      "studentName": "",
+      "studentEmail": "",
+      "timestamp": "2026-10-12T15:07:18.255Z",
+      "isLive": false
+    },
+    {
+      "paymentId": "pay_test_valid123",
+      "orderId": "order_Tn2kWw1GEADyts",
+      "amount": 500,
+      "status": "captured",
+      "method": "razorpay_standard",
+      "eventId": "",
+      "userId": "",
+      "studentName": "",
+      "studentEmail": "",
+      "timestamp": "2026-10-12T15:18:07.789Z",
+      "isLive": false
+    },
+    {
+      "paymentId": "pay_test123",
+      "orderId": "order_Tn2wG2HuqXYBSb",
+      "amount": 500,
+      "status": "captured",
+      "method": "razorpay_standard",
+      "eventId": "",
+      "userId": "",
+      "studentName": "",
+      "studentEmail": "",
+      "timestamp": "2026-10-12T15:28:51.923Z",
+      "isLive": false
+    },
+    {
+      "paymentId": "pay_test_verified_99",
+      "orderId": "order_Tn3ACh6WSRWPvA",
+      "amount": 149,
+      "status": "captured",
+      "method": "razorpay_standard",
+      "eventId": "",
+      "userId": "",
+      "studentName": "",
+      "studentEmail": "",
+      "timestamp": "2026-10-12T15:42:07.628Z",
+      "isLive": false
+    }
+  ],
+  "razorpayConfig": {
+    "keyId": "rzp_test_Tn2gGCmZM8sHv0",
+    "keySecret": "nLuBuOx9Mu7NzmTCbAX8hLfP",
+    "accountNumber": "",
+    "webhookSecret": ""
+  },
   "flushedAt": 1791650869902,
   "supabaseConfig": {
     "url": "",
     "anonKey": "",
     "enabled": false
-  }
+  },
+  "passwordResetTokens": {}
 }

@@ -201,6 +201,63 @@ export class FirebaseDbService {
     }
   }
 
+  // ================= PASSWORD UPDATE IN FIRESTORE =================
+  static async updateAccountPassword(email: string, newPassword: string): Promise<boolean> {
+    if (!isFirebaseInitialized || !db) return false;
+    try {
+      const cleanEmail = email.toLowerCase().trim();
+      let updatedCount = 0;
+
+      // 1. Update matching docs in accounts collection
+      try {
+        const accCol = collection(db, COLLECTIONS.ACCOUNTS);
+        const qAcc = query(accCol, where('email', '==', cleanEmail));
+        const snapAcc = await getDocs(qAcc);
+        for (const docSnap of snapAcc.docs) {
+          await setDoc(docSnap.ref, { password: newPassword, updatedAt: new Date().toISOString() }, { merge: true });
+          updatedCount++;
+        }
+      } catch (err) {
+        console.warn('Firestore updateAccountPassword accounts error:', err);
+      }
+
+      // 2. Update matching docs in users collection
+      try {
+        const userCol = collection(db, COLLECTIONS.USERS);
+        const qUser = query(userCol, where('email', '==', cleanEmail));
+        const snapUser = await getDocs(qUser);
+        for (const docSnap of snapUser.docs) {
+          await setDoc(docSnap.ref, { password: newPassword, updatedAt: new Date().toISOString() }, { merge: true });
+          updatedCount++;
+        }
+      } catch (err) {
+        console.warn('Firestore updateAccountPassword users error:', err);
+      }
+
+      // 3. If no docs found in Firestore, create an accounts entry
+      if (updatedCount === 0) {
+        const fallbackUid = `usr_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
+        const docRef = doc(db, COLLECTIONS.ACCOUNTS, fallbackUid);
+        await setDoc(docRef, {
+          uid: fallbackUid,
+          email: cleanEmail,
+          password: newPassword,
+          name: cleanEmail.split('@')[0],
+          role: 'user',
+          authProvider: 'email',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+      }
+
+      console.log(`[FirebaseDbService] Firestore password updated for ${cleanEmail}`);
+      return true;
+    } catch (error) {
+      console.warn('Firestore updateAccountPassword error:', error);
+      return false;
+    }
+  }
+
   // ================= USER PROFILES =================
   static async getUserProfile(uid: string): Promise<UserProfile | null> {
     if (!isFirebaseInitialized || !db) return null;
@@ -231,6 +288,23 @@ export class FirebaseDbService {
       return null;
     } catch (e) {
       console.warn('Firestore getUserProfile error:', e);
+      return null;
+    }
+  }
+
+  static async findUserByEmail(email: string): Promise<UserProfile | null> {
+    if (!isFirebaseInitialized || !db) return null;
+    try {
+      const cleanEmail = email.toLowerCase().trim();
+      const usersRef = collection(db, COLLECTIONS.USERS);
+      const q = query(usersRef, where('email', '==', cleanEmail));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        return snap.docs[0].data() as UserProfile;
+      }
+      return null;
+    } catch (e) {
+      console.warn('Firestore findUserByEmail error:', e);
       return null;
     }
   }
@@ -291,7 +365,10 @@ export class FirebaseDbService {
       const snapshot = await getDocs(colRef);
       const payouts: PayoutRecord[] = [];
       snapshot.forEach((docSnap) => {
-        payouts.push(docSnap.data() as PayoutRecord);
+        const data = docSnap.data();
+        if (data && data.payoutId) {
+          payouts.push(data as PayoutRecord);
+        }
       });
       return payouts.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
     } catch (error) {
@@ -304,7 +381,14 @@ export class FirebaseDbService {
     if (!isFirebaseInitialized || !db) return false;
     try {
       const docRef = doc(db, COLLECTIONS.PAYOUTS, payout.payoutId);
-      await setDoc(docRef, payout, { merge: true });
+      // Remove undefined values to prevent Firestore rejection
+      const sanitized: Record<string, any> = {};
+      Object.entries(payout).forEach(([k, v]) => {
+        if (v !== undefined) {
+          sanitized[k] = v;
+        }
+      });
+      await setDoc(docRef, sanitized, { merge: true });
       return true;
     } catch (error) {
       console.warn('Firestore savePayout error:', error);

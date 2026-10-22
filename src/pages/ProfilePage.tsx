@@ -73,22 +73,28 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
       return;
     }
 
+    const cleanPhone = phone.trim().replace(/[\s\-()+]/g, '');
+    if (cleanPhone && !/^[0-9]{10}$/.test(cleanPhone)) {
+      setProfileError('Please enter a valid 10-digit phone number (e.g., 9876543210).');
+      return;
+    }
+
     setProfileLoading(true);
 
     try {
       const res = await updateProfile({
         name: name.trim(),
         email: email.trim(),
-        phone: phone.trim(),
+        phone: cleanPhone,
         college: college.trim(),
       });
 
       if (res.success) {
-        setProfileSuccess('✓ Profile details updated successfully!');
+        setProfileSuccess('Saved successfully');
         setTimeout(() => {
           setProfileSuccess(null);
           setIsEditProfileOpen(false);
-        }, 2000);
+        }, 2200);
       } else {
         setProfileError(res.error || 'Failed to update profile details.');
       }
@@ -137,7 +143,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = () => {
       const res = await changePassword(currentPassword, newPassword);
 
       if (res.success) {
-        setPasswordSuccess('✓ Password changed successfully! Your new password is now active.');
+        setPasswordSuccess('Saved successfully');
         setCurrentPassword('');
         setNewPassword('');
         setConfirmPassword('');

@@ -3,6 +3,15 @@ import { UserProfile, UserRole, RegisteredAccount } from '../types';
 import { StorageService } from '../services/storageService';
 import { JwtService } from '../services/jwtService';
 import { FirebaseDbService } from '../services/firebaseDbService';
+import { 
+  firebaseSendPasswordReset, 
+  firebaseConfirmPasswordReset, 
+  firebaseVerifyPasswordResetCode,
+  firebaseLoginWithEmail,
+  firebaseRegisterWithEmail,
+  getFirebaseErrorMessage, 
+  isFirebaseInitialized 
+} from '../services/firebase';
 
 interface AuthContextType {
   currentUser: UserProfile | null;
@@ -30,6 +39,8 @@ interface AuthContextType {
   updateProfile: (data: Partial<UserProfile>) => Promise<{ success: boolean; error?: string }>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
   resetPassword: (email: string, newPassword?: string) => Promise<{ success: boolean; error?: string }>;
+  sendPasswordResetLink: (email: string, targetRole?: UserRole) => Promise<{ success: boolean; error?: string; message?: string; resetLink?: string }>;
+  confirmPasswordResetWithCode: (code: string, newPassword: string, email?: string) => Promise<{ success: boolean; error?: string }>;
 }
 
 const AUTH_STORAGE_KEY = 'festplus_auth_user_v1';
@@ -120,6 +131,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<{ success: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = name.trim();
+    const cleanPhone = (phone || '').trim().replace(/[\s\-()+]/g, '');
 
     if (!cleanName) {
       return { success: false, error: 'Please enter your full name.' };
@@ -127,22 +139,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!cleanEmail || !cleanEmail.includes('@')) {
       return { success: false, error: 'Please enter a valid email address.' };
     }
+    if (!cleanPhone) {
+      return { success: false, error: 'Mobile number is required to register.' };
+    }
+    if (!/^[0-9]{10}$/.test(cleanPhone)) {
+      return { success: false, error: 'Please enter a valid 10-digit mobile number (e.g., 9876543210).' };
+    }
     if (!password || password.length < 6) {
       return { success: false, error: 'Password must be at least 6 characters long.' };
     }
 
     try {
-      const existing = await StorageService.findAccountByEmailAsync(cleanEmail);
+      const existing = await StorageService.findAccountByIdentifierAsync(cleanEmail);
       if (existing) {
         return { 
           success: false, 
           error: 'An account with this email is already registered. Please sign in.' 
         };
       }
+      const existingPhone = await StorageService.findAccountByIdentifierAsync(cleanPhone);
+      if (existingPhone) {
+        return { 
+          success: false, 
+          error: 'An account with this mobile number is already registered. Please sign in or use another number.' 
+        };
+      }
 
       const uid = `usr_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
       const collegeName = college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student');
-      const userPhone = phone?.trim() || '';
       const avatarUrl = `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`;
 
       const newAccount: RegisteredAccount = {
@@ -152,7 +176,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         password: password, // Stored safely in persistent database
         role: selectedRole,
         college: collegeName,
-        phone: userPhone,
+        phone: cleanPhone,
         photoURL: avatarUrl,
         authProvider: 'email',
         createdAt: new Date().toISOString(),
@@ -179,7 +203,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         email: cleanEmail,
         role: selectedRole,
         college: collegeName,
-        phone: userPhone,
+        phone: cleanPhone,
         photoURL: avatarUrl,
         authProvider: 'email',
         token,
@@ -199,35 +223,55 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // =========================================================================
-  // 🔐 DIRECT MANUAL LOGIN
+  // 🔐 DIRECT MANUAL LOGIN (Supports Email OR 10-Digit Mobile Number)
   // =========================================================================
   const login = async (
-    email: string, 
+    identifier: string, 
     password: string, 
     selectedRole: UserRole
   ): Promise<{ success: boolean; error?: string }> => {
-    const cleanEmail = email.trim().toLowerCase();
+    const rawIdentifier = identifier.trim();
+    const cleanPhone = rawIdentifier.replace(/[\s\-()+]/g, '');
+    const isPhone = cleanPhone.length === 10 && /^[0-9]{10}$/.test(cleanPhone);
+    const isEmail = rawIdentifier.includes('@');
 
-    if (!cleanEmail || !cleanEmail.includes('@')) {
-      return { success: false, error: 'Please enter a valid email address.' };
+    if (!isEmail && !isPhone) {
+      return { success: false, error: 'Please enter a valid email address or 10-digit mobile number.' };
     }
     if (!password) {
       return { success: false, error: 'Please enter your password.' };
     }
 
     try {
-      // Find account both in local cache AND persistent server database
-      const account = await StorageService.findAccountByEmailAsync(cleanEmail);
+      // Find account both in local cache AND persistent server database (query fresh)
+      let account = await StorageService.findAccountByIdentifierAsync(rawIdentifier, true);
 
       if (!account) {
         return {
           success: false,
-          error: 'No account found with this email. Please switch to "Create Account" tab to register.',
+          error: isPhone
+            ? 'No account found with this mobile number. Please switch to "Create Account" tab to register.'
+            : 'No account found with this email. Please switch to "Create Account" tab to register.',
         };
       }
 
-      // Check password if set
-      if (account.password && account.password !== password) {
+      // Check password
+      let passwordMatched = !account.password || account.password === password;
+
+      // If local/server password didn't match, also test Firebase Auth if initialized
+      if (!passwordMatched && isFirebaseInitialized && account.email) {
+        try {
+          await firebaseLoginWithEmail(account.email, password);
+          // If Firebase Auth accepted it, sync the new password across all database layers!
+          passwordMatched = true;
+          await StorageService.updateAccountPasswordAsync(account.email, password, selectedRole, account.name);
+          account.password = password;
+        } catch (fbErr: any) {
+          console.warn('[Firebase direct login check]:', fbErr?.code);
+        }
+      }
+
+      if (!passwordMatched) {
         return {
           success: false,
           error: 'Incorrect password. Please verify your credentials or reset your password.',
@@ -237,7 +281,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Mint HMAC-SHA256 JWT Token
       const token = await JwtService.createToken({
         uid: account.uid,
-        email: cleanEmail,
+        email: account.email,
         name: account.name,
         role: selectedRole,
       });
@@ -249,7 +293,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userProfile: UserProfile = {
         uid: account.uid,
         name: account.name,
-        email: cleanEmail,
+        email: account.email,
         role: selectedRole,
         college: account.college || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
         phone: account.phone || '',
@@ -257,7 +301,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authProvider: account.authProvider || 'email',
         token,
         createdAt: account.createdAt,
-        updatedAt: new Date().toISOString(),
+        updatedAt: account.updatedAt || new Date().toISOString(),
       };
 
       // Update role & sync
@@ -288,14 +332,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const uid = providedUid || `g_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
 
     try {
-      const accounts = StorageService.getRegisteredAccounts();
-      const existing = accounts.find(a => a.email.toLowerCase().trim() === cleanEmail);
+      // Check existing account from database to preserve user edits!
+      let existing = await StorageService.findAccountByIdentifierAsync(cleanEmail, true);
       const isNewUser = !existing;
+
+      // Preserve previously saved edits from database!
+      const resolvedName = existing?.name || cleanName;
+      const resolvedCollege = existing?.college || college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student');
+      const resolvedPhone = existing?.phone || phone?.trim() || '9876543210';
+      const resolvedPhoto = existing?.photoURL || photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(resolvedName)}`;
 
       const token = await JwtService.createToken({
         uid: existing?.uid || uid,
         email: cleanEmail,
-        name: cleanName,
+        name: resolvedName,
         role: selectedRole,
       });
 
@@ -305,16 +355,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const userProfile: UserProfile = {
         uid: existing?.uid || uid,
-        name: cleanName,
+        name: resolvedName,
         email: cleanEmail,
         role: selectedRole,
-        college: existing?.college || college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
-        phone: existing?.phone || phone?.trim() || '',
-        photoURL: photoURL || existing?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanName)}`,
-        authProvider: 'google',
+        college: resolvedCollege,
+        phone: resolvedPhone,
+        photoURL: resolvedPhoto,
+        authProvider: existing?.authProvider || 'google',
         token,
         createdAt: existing?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        updatedAt: existing?.updatedAt || new Date().toISOString(),
       };
 
       StorageService.saveAccount({
@@ -325,7 +375,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         college: userProfile.college,
         phone: userProfile.phone,
         photoURL: userProfile.photoURL,
-        authProvider: 'google',
+        authProvider: userProfile.authProvider || 'google',
         createdAt: userProfile.createdAt,
       });
 
@@ -410,6 +460,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         photoURL: updatedUser.photoURL,
       });
 
+      // Notify dashboard and components of fresh data
+      window.dispatchEvent(new Event('campuspass_data_updated'));
+      window.dispatchEvent(new Event('storage'));
+
       return { success: true };
     } catch (err: any) {
       console.error('Update profile error:', err);
@@ -442,7 +496,160 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // Reset password
+  // Send password reset email link (Strict registration check for both login portals)
+  const sendPasswordResetLink = async (
+    email: string, 
+    targetRole?: UserRole
+  ): Promise<{ success: boolean; error?: string; message?: string; resetLink?: string }> => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return { success: false, error: 'Please enter a valid email address.' };
+    }
+
+    try {
+      // 1. STRICT REGISTRATION CHECK: Verify account exists in local, server, or cloud Firestore database
+      const account = await StorageService.findAccountByEmailAsync(cleanEmail);
+      let userProfile = null;
+      if (!account && isFirebaseInitialized) {
+        userProfile = await FirebaseDbService.findUserByEmail(cleanEmail);
+      }
+
+      // If user is not registered at all -> do NOT send email and inform user immediately
+      if (!account && !userProfile) {
+        const portalText = targetRole === 'host' ? 'Host / Organizer' : 'Student';
+        return {
+          success: false,
+          error: `No registered ${portalText} account found with "${cleanEmail}". Please verify your email or create a new account first.`
+        };
+      }
+
+      // 2. ROLE CHECK FOR BOTH LOGINS: Ensure user is resetting from their matching portal
+      const registeredRole = account?.role || userProfile?.role;
+      if (targetRole && registeredRole && registeredRole !== targetRole) {
+        const currentPortal = targetRole === 'host' ? 'Host / Organizer' : 'Student';
+        const registeredPortal = registeredRole === 'host' ? 'Host / Organizer' : 'Student';
+        return {
+          success: false,
+          error: `"${cleanEmail}" is registered as a ${registeredPortal} account. Please switch to the ${registeredPortal} login portal to reset your password.`
+        };
+      }
+
+      // 3. GENERATE GENUINE SERVER-SECURED RESET LINK
+      let serverResetLink = '';
+      try {
+        const origin = typeof window !== 'undefined' ? window.location.origin : '';
+        const srvRes = await fetch('/api/auth/send-reset-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: cleanEmail,
+            targetRole: targetRole || registeredRole,
+            origin,
+            account: account || (userProfile ? {
+              uid: userProfile.uid,
+              name: userProfile.name,
+              email: cleanEmail,
+              role: registeredRole,
+              college: userProfile.college,
+              phone: userProfile.phone,
+            } : undefined),
+          }),
+        });
+        if (srvRes.ok) {
+          const srvData = await srvRes.json();
+          if (srvData.resetLink) {
+            serverResetLink = srvData.resetLink;
+          }
+        }
+      } catch (srvErr) {
+        console.warn('Server reset link dispatch notice:', srvErr);
+      }
+
+      // 4. ALSO DISPATCH OFFICIAL GOOGLE FIREBASE AUTH EMAIL LINK IF INITIALIZED
+      if (isFirebaseInitialized) {
+        try {
+          await firebaseSendPasswordReset(cleanEmail);
+        } catch (fbErr: any) {
+          console.warn('[Firebase sendPasswordReset info]:', fbErr?.code || fbErr?.message);
+          if (fbErr?.code === 'auth/user-not-found' && account?.password) {
+            try {
+              await firebaseRegisterWithEmail(cleanEmail, account.password, account.name || 'User');
+              await firebaseSendPasswordReset(cleanEmail);
+            } catch (autoErr) {
+              console.warn('Firebase user auto-registration notice:', autoErr);
+            }
+          }
+        }
+      }
+
+      return {
+        success: true,
+        message: 'Check email, reset link sent successfully',
+        resetLink: serverResetLink,
+      };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Failed to dispatch password reset email.' };
+    }
+  };
+
+  // Confirm reset code/token from email link
+  const confirmPasswordResetWithCode = async (
+    code: string, 
+    newPassword: string, 
+    email?: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!newPassword || newPassword.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters long.' };
+    }
+    try {
+      let resolvedEmail = email ? email.trim().toLowerCase() : '';
+      let resolvedRole: UserRole | undefined = undefined;
+
+      // 1. If it's a server cryptographic reset token (prt_...)
+      if (code.startsWith('prt_')) {
+        const res = await fetch('/api/auth/confirm-reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: code, newPassword }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          return { success: false, error: data.error || 'Failed to reset password. The link may have expired.' };
+        }
+        if (data.email) resolvedEmail = data.email.toLowerCase().trim();
+        if (data.role) resolvedRole = data.role as UserRole;
+      } else if (isFirebaseInitialized && !code.startsWith('demo-')) {
+        // 2. If it's an official Firebase Auth oobCode
+        if (!resolvedEmail) {
+          try {
+            const verified = await firebaseVerifyPasswordResetCode(code);
+            if (verified) resolvedEmail = verified.toLowerCase().trim();
+          } catch (verErr) {
+            console.warn('Firebase verify code notice:', verErr);
+          }
+        }
+        await firebaseConfirmPasswordReset(code, newPassword);
+      }
+
+      // 3. PERSIST THE NEW PASSWORD IN ALL DATABASE LAYERS (LocalStorage, Server DB, Postgres, Firestore)
+      if (resolvedEmail) {
+        await StorageService.updateAccountPasswordAsync(resolvedEmail, newPassword, resolvedRole);
+
+        if (currentUser && currentUser.email.toLowerCase().trim() === resolvedEmail) {
+          setCurrentUser({
+            ...currentUser,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: getFirebaseErrorMessage(err) };
+    }
+  };
+
+  // Reset password (backward-compatible)
   const resetPassword = async (email: string, newPassword?: string): Promise<{ success: boolean; error?: string }> => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !cleanEmail.includes('@')) {
@@ -482,6 +689,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateProfile,
         changePassword,
         resetPassword,
+        sendPasswordResetLink,
+        confirmPasswordResetWithCode,
       }}
     >
       {children}

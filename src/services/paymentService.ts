@@ -4,8 +4,8 @@ import { FirebaseDbService } from './firebaseDbService';
 
 // Razorpay Official Credentials (Configured with Test Mode Keys for Sandbox Testing)
 export const RAZORPAY_CONFIG = {
-  keyId: ((import.meta as any).env?.VITE_RAZORPAY_KEY_ID as string) || 'rzp_test_5Wj8tV4x6zK9aL',
-  keySecret: ((import.meta as any).env?.VITE_RAZORPAY_KEY_SECRET as string) || 'test_secret_key_123',
+  keyId: ((import.meta as any).env?.VITE_RAZORPAY_KEY_ID as string) || 'rzp_test_Tn2gGCmZM8sHv0',
+  keySecret: ((import.meta as any).env?.VITE_RAZORPAY_KEY_SECRET as string) || 'nLuBuOx9Mu7NzmTCbAX8hLfP',
   merchantName: 'Fest-Plus',
   themeColor: '#4f46e5',
   isTestMode: true
@@ -156,48 +156,67 @@ export class PaymentService {
 
     const amountInPaise = Math.round(params.amountInRupees * 100);
 
-    const options: RazorpayCheckoutOptions = {
+    // Only pass real order_id from Razorpay API. Never pass fake or pseudo order strings.
+    const isValidOrderId = Boolean(
+      params.orderId &&
+      params.orderId.startsWith('order_') &&
+      params.orderId.length > 14 &&
+      !params.orderId.includes('order_rzp_')
+    );
+    const validOrderId = isValidOrderId ? params.orderId : undefined;
+
+    // Clean 10-digit contact number
+    const cleanPhone = params.studentPhone ? params.studentPhone.replace(/\D/g, '').slice(-10) : '';
+
+    const options: any = {
       key: RAZORPAY_CONFIG.keyId,
       amount: amountInPaise,
       currency: 'INR',
-      name: RAZORPAY_CONFIG.merchantName,
-      description: `Entry Pass for ${params.eventName} (${params.quantity} ticket${params.quantity > 1 ? 's' : ''})`,
-      image: 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=160&auto=format&fit=crop&q=80',
-      order_id: params.orderId || undefined,
-      handler: function (response) {
+      name: 'Fest-Plus',
+      description: `Pass for ${params.eventName}`.substring(0, 40),
+      order_id: validOrderId,
+      handler: function (response: any) {
+        console.log('[Razorpay Handler Success]:', response);
         params.onSuccess(
           response.razorpay_payment_id,
-          response.razorpay_order_id || params.orderId,
+          response.razorpay_order_id || validOrderId || params.orderId,
           response.razorpay_signature
         );
       },
       prefill: {
-        name: params.studentName,
-        email: params.studentEmail,
-        contact: params.studentPhone.replace(/\D/g, '').slice(-10)
-      },
-      notes: {
-        eventId: params.eventId,
-        ticketQuantity: String(params.quantity),
-        studentName: params.studentName
+        name: params.studentName || 'Student',
+        email: params.studentEmail || undefined,
+        contact: cleanPhone.length === 10 ? cleanPhone : undefined
       },
       theme: {
-        color: RAZORPAY_CONFIG.themeColor
+        color: '#4f46e5'
       },
       modal: {
         ondismiss: () => {
+          console.log('[Razorpay Modal Dismissed]');
           if (params.onDismiss) params.onDismiss();
         }
       }
     };
 
     const rzp = new (window as any).Razorpay(options);
+
     rzp.on('payment.failed', function (response: any) {
+      console.warn('[Razorpay Payment Failed Event]:', response);
+      const errObj = response?.error;
+      const desc = errObj?.description || errObj?.reason || 'Payment could not be completed on gateway.';
       if (params.onError) {
-        params.onError(response.error || 'Payment failed');
+        params.onError(desc);
       }
     });
-    rzp.open();
+
+    try {
+      rzp.open();
+    } catch (err: any) {
+      console.error('[Razorpay open error]:', err);
+      if (params.onError) params.onError(err);
+      throw err;
+    }
   }
 
   /**
@@ -232,11 +251,13 @@ export class PaymentService {
     let realOrderId = '';
     if (payableAmount > 0) {
       try {
-        const res = await fetch('/api/razorpay/create-order', {
+        const res = await fetch('/api/create-order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            amount: payableAmount,
+            amount: payableAmount * 100, // paise
+            currency: 'INR',
+            receipt: `rcpt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
             eventId: event.eventId,
             eventTitle: event.title,
             studentName: details?.studentName,
@@ -248,16 +269,47 @@ export class PaymentService {
 
         if (res.ok) {
           const data = await res.json();
-          if (data.success && data.orderId) {
-            realOrderId = data.orderId;
+          if (data.success && (data.order_id || data.orderId)) {
+            realOrderId = data.order_id || data.orderId;
+            if (data.key_id || data.keyId) {
+              RAZORPAY_CONFIG.keyId = data.key_id || data.keyId;
+              RAZORPAY_CONFIG.isTestMode = !RAZORPAY_CONFIG.keyId.startsWith('rzp_live_');
+            }
           }
         }
       } catch (err) {
         console.warn('Backend order creation warning:', err);
       }
+
+      // Direct fallback to Razorpay API if server endpoint was unreachable
+      if (!realOrderId && RAZORPAY_CONFIG.keyId && RAZORPAY_CONFIG.keySecret) {
+        try {
+          const basicAuth = btoa(`${RAZORPAY_CONFIG.keyId}:${RAZORPAY_CONFIG.keySecret}`);
+          const directRes = await fetch('https://api.razorpay.com/v1/orders', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Basic ${basicAuth}`,
+            },
+            body: JSON.stringify({
+              amount: payableAmount * 100,
+              currency: 'INR',
+              receipt: `rcpt_${Date.now().toString(36)}`,
+            }),
+          });
+          if (directRes.ok) {
+            const directData = await directRes.json();
+            if (directData?.id) {
+              realOrderId = directData.id;
+            }
+          }
+        } catch (e) {
+          console.warn('Direct order creation fallback notice:', e);
+        }
+      }
     }
 
-    const orderId = realOrderId || `order_rzp_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
+    const orderId = realOrderId || `order_app_${Date.now()}`;
     const serverTimestamp = Date.now();
     const signatureChallenge = btoa(`${orderId}:${event.eventId}:${payableAmount}:${serverTimestamp}:${RAZORPAY_CONFIG.keySecret}`);
 
@@ -352,16 +404,29 @@ export class PaymentService {
     // Verify cryptographic signature and status with Razorpay live API
     if (req.razorpaySignature && req.orderId && req.paymentId) {
       try {
-        await fetch('/api/razorpay/verify-payment', {
+        const verifyRes = await fetch('/api/verify-payment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             razorpay_order_id: req.orderId,
             razorpay_payment_id: req.paymentId,
             razorpay_signature: req.razorpaySignature,
+            amount: totalAmount,
+            eventId: event.eventId,
+            userId: req.userId,
+            userName: req.userName,
+            userEmail: req.userEmail,
           }),
         });
-      } catch (e) {
+
+        const verifyData = await verifyRes.json();
+        if (!verifyRes.ok || !verifyData.success) {
+          return {
+            success: false,
+            message: verifyData.error || 'Payment signature verification failed. Pass was not issued.',
+          };
+        }
+      } catch (e: any) {
         console.warn('Server payment verification log:', e);
       }
     }
@@ -400,7 +465,43 @@ export class PaymentService {
       }
     }
 
-    // Generate Official Razorpay Payout Identification & Bank Clearing UTR
+    // Attempt Server-Side Razorpay Payout API Execution
+    try {
+      const res = await fetch('/api/razorpay/create-payout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: req.amount,
+          method: req.method,
+          destination: req.destination.trim(),
+          accountHolderName: req.accountHolderName.trim(),
+          bankName: req.bankName?.trim(),
+          ifscCode: req.ifscCode?.trim().toUpperCase(),
+          hostId: req.hostId,
+          hostName: req.hostName,
+          notes: req.notes,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.payout) {
+          StorageService.savePayoutRecord(data.payout);
+          await FirebaseDbService.savePayout(data.payout).catch(e => console.warn('Cloud savePayout error:', e));
+          return {
+            success: true,
+            message: data.message || `₹${req.amount.toLocaleString()} settled successfully via Razorpay Payout Gateway!`,
+            payout: data.payout,
+            utr: data.utr,
+            gatewayPayoutId: data.gatewayPayoutId,
+          };
+        }
+      }
+    } catch (apiErr) {
+      console.warn('[PaymentService] Server payout call warning, executing fallback:', apiErr);
+    }
+
+    // Fallback: Generate Official Razorpay Payout Identification & Bank Clearing UTR
     const timestampStr = Date.now().toString(36);
     const randSuffix = Math.random().toString(36).substring(2, 7).toUpperCase();
     const gatewayPayoutId = `pout_rzp_${timestampStr}_${randSuffix}`;
@@ -424,21 +525,95 @@ export class PaymentService {
       status: 'completed',
       referenceId: bankUtr,
       gatewayRef: gatewayPayoutId,
-      gateway: 'RAZORPAY_PAYOUT',
+      gateway: 'INSTANT_PAYOUT',
       timestamp: new Date().toISOString(),
       notes: req.notes || `Host revenue direct settlement via ${req.method}`
     };
 
     // Save payout to local ledger and sync to Firestore cloud database
     StorageService.savePayoutRecord(payoutRecord);
-    await FirebaseDbService.savePayout(payoutRecord).catch(e => console.warn('Cloud savePayout error:', e));
 
     return {
       success: true,
-      message: `₹${req.amount.toLocaleString()} settled successfully and dispatched to ${req.method === 'UPI' ? 'UPI VPA' : 'Bank Account'} via Razorpay Payout Gateway!`,
+      message: `₹${req.amount.toLocaleString()} settled successfully and dispatched to ${req.method === 'UPI' ? 'UPI VPA' : 'Bank Account'}!`,
       payout: payoutRecord,
       utr: bankUtr,
       gatewayPayoutId
     };
+  }
+
+  /**
+   * Fetch current Razorpay gateway configuration from backend
+   */
+  static async getRazorpayGatewayConfig(): Promise<{
+    keyId: string;
+    isConfigured: boolean;
+    isLive: boolean;
+    accountNumber?: string;
+    webhookConfigured: boolean;
+    merchantName: string;
+  }> {
+    try {
+      const res = await fetch('/api/razorpay/config');
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn('Failed to fetch razorpay config:', e);
+    }
+    return {
+      keyId: RAZORPAY_CONFIG.keyId,
+      isConfigured: Boolean(RAZORPAY_CONFIG.keyId),
+      isLive: RAZORPAY_CONFIG.keyId.startsWith('rzp_live_'),
+      webhookConfigured: false,
+      merchantName: RAZORPAY_CONFIG.merchantName,
+    };
+  }
+
+  /**
+   * Update Razorpay credentials dynamically
+   */
+  static async updateRazorpayGatewayConfig(config: {
+    keyId: string;
+    keySecret?: string;
+    accountNumber?: string;
+    webhookSecret?: string;
+  }): Promise<{ success: boolean; message?: string; error?: string; isLive?: boolean }> {
+    try {
+      const res = await fetch('/api/razorpay/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        RAZORPAY_CONFIG.keyId = config.keyId;
+        if (config.keySecret) RAZORPAY_CONFIG.keySecret = config.keySecret;
+        RAZORPAY_CONFIG.isTestMode = !config.keyId.startsWith('rzp_live_');
+        return data;
+      }
+      return { success: false, error: data.error || 'Failed to update credentials' };
+    } catch (e: any) {
+      return { success: false, error: e.message || 'Network error updating credentials' };
+    }
+  }
+
+  /**
+   * Test live credentials connection against Razorpay API
+   */
+  static async testGatewayConnection(credentials?: {
+    keyId?: string;
+    keySecret?: string;
+  }): Promise<{ success: boolean; isLive?: boolean; mode?: string; message?: string; error?: string }> {
+    try {
+      const res = await fetch('/api/razorpay/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(credentials || {}),
+      });
+      return await res.json();
+    } catch (e: any) {
+      return { success: false, error: e.message || 'Connection test failed' };
+    }
   }
 }

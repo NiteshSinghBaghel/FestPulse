@@ -9,6 +9,8 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   sendPasswordResetEmail,
+  confirmPasswordReset,
+  verifyPasswordResetCode,
   updateProfile as firebaseUpdateProfile,
   updatePassword as firebaseUpdatePassword,
   signOut as firebaseSignOut,
@@ -156,6 +158,22 @@ export const signInWithGoogleIdToken = async (idToken: string) => {
 export const firebaseSendPasswordReset = async (email: string): Promise<void> => {
   if (!auth) throw new Error('Firebase Auth is not initialized');
   await sendPasswordResetEmail(auth, email);
+};
+
+/**
+ * Confirm password reset using code from email
+ */
+export const firebaseConfirmPasswordReset = async (code: string, newPassword: string): Promise<void> => {
+  if (!auth) throw new Error('Firebase Auth is not initialized');
+  await confirmPasswordReset(auth, code, newPassword);
+};
+
+/**
+ * Verify password reset code from email link
+ */
+export const firebaseVerifyPasswordResetCode = async (code: string): Promise<string> => {
+  if (!auth) throw new Error('Firebase Auth is not initialized');
+  return await verifyPasswordResetCode(auth, code);
 };
 
 /**

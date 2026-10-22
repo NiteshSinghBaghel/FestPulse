@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { FestLogo } from '../components/FestLogo';
 import { UserRole } from '../types';
+import { firebaseVerifyPasswordResetCode, getFirebaseErrorMessage } from '../services/firebase';
 import { 
   Mail, 
   Lock, 
@@ -27,7 +28,12 @@ import {
   Building2,
   BarChart3,
   Users,
-  Home
+  Home,
+  Send,
+  KeyRound,
+  RotateCcw,
+  Copy,
+  ExternalLink
 } from 'lucide-react';
 
 interface AuthPageProps {
@@ -43,7 +49,14 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   onBackToLanding,
   onSwitchRole 
 }) => {
-  const { login, register, resetPassword, loginWithGoogle } = useAuth();
+  const { 
+    login, 
+    register, 
+    resetPassword, 
+    sendPasswordResetLink, 
+    confirmPasswordResetWithCode, 
+    loginWithGoogle 
+  } = useAuth();
 
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [role, setRole] = useState<UserRole>(initialRole);
@@ -60,11 +73,82 @@ export const AuthPage: React.FC<AuthPageProps> = ({
   const [college, setCollege] = useState('');
   const [phone, setPhone] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [confirmRegisterPassword, setConfirmRegisterPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
+  const [showConfirmRegisterPassword, setShowConfirmRegisterPassword] = useState(false);
   const [isPasswordFocused, setIsPasswordFocused] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [resetEmailSent, setResetEmailSent] = useState(false);
+  const [resetCode, setResetCode] = useState<string | null>(null);
+  const [generatedResetLink, setGeneratedResetLink] = useState<string>('');
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  // Check if user reached this page via an official password reset email link
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams(window.location.hash.startsWith('#') ? window.location.hash.substring(1) : window.location.hash);
+      
+      const oobCode = searchParams.get('oobCode') || hashParams.get('oobCode');
+      const resetToken = searchParams.get('resetToken') || hashParams.get('resetToken');
+      const action = searchParams.get('mode') || hashParams.get('mode');
+
+      const incomingCode = resetToken || oobCode;
+
+      if (incomingCode && (action === 'resetPassword' || !action || resetToken)) {
+        setResetCode(incomingCode);
+        setMode('forgot');
+        setLoading(true);
+
+        // If it's a server resetToken, verify it with server
+        if (incomingCode.startsWith('prt_')) {
+          fetch(`/api/auth/verify-reset-token?token=${encodeURIComponent(incomingCode)}`)
+            .then(res => res.json())
+            .then(data => {
+              setLoading(false);
+              if (data.valid) {
+                if (data.email) {
+                  setEmail(data.email);
+                }
+                if (data.role) {
+                  setRole(data.role as UserRole);
+                }
+                setSuccessMsg(`✓ Reset link verified for ${data.email}. Please set your new password.`);
+              } else {
+                setError(data.error || 'This password reset link is invalid or has expired. Please request a new link.');
+                setResetCode(null);
+              }
+            })
+            .catch(() => {
+              setLoading(false);
+              setError('Failed to verify reset link. Please try requesting a new link.');
+              setResetCode(null);
+            });
+        } else {
+          // Firebase oobCode - verify code and extract registered email
+          firebaseVerifyPasswordResetCode(incomingCode)
+            .then((extractedEmail) => {
+              setLoading(false);
+              if (extractedEmail) {
+                setEmail(extractedEmail);
+                setSuccessMsg(`✓ Secure reset link verified for ${extractedEmail}. Please set your new password.`);
+              } else {
+                setSuccessMsg('✓ Secure reset link verified! Please set your new password.');
+              }
+            })
+            .catch((err) => {
+              setLoading(false);
+              setError(getFirebaseErrorMessage(err));
+              setResetCode(null);
+            });
+        }
+      }
+    }
+  }, []);
 
   // Switch role handler (clean switch without form selector)
   const handleRoleSwitch = (newRole: UserRole) => {
@@ -148,13 +232,29 @@ export const AuthPage: React.FC<AuthPageProps> = ({
           setLoading(false);
           return;
         }
+        if (password !== confirmRegisterPassword) {
+          setError('Passwords do not match. Please verify your confirm password.');
+          setLoading(false);
+          return;
+        }
+        const cleanPhone = phone.trim().replace(/[\s\-()+]/g, '');
+        if (!cleanPhone) {
+          setError('Mobile number is required. Please enter your 10-digit mobile number.');
+          setLoading(false);
+          return;
+        }
+        if (!/^[0-9]{10}$/.test(cleanPhone)) {
+          setError('Please enter a valid 10-digit mobile number (e.g., 9876543210).');
+          setLoading(false);
+          return;
+        }
         const res = await register(
           name.trim(), 
           cleanEmail, 
           password, 
           role, 
           college.trim() || (role === 'host' ? 'Campus Event Council' : 'College Student'), 
-          phone.trim()
+          cleanPhone
         );
         if (!res.success) {
           setError(res.error || 'Registration failed.');
@@ -163,20 +263,53 @@ export const AuthPage: React.FC<AuthPageProps> = ({
         }
         onSuccess();
       } else if (mode === 'forgot') {
-        if (!newPassword || newPassword.length < 6) {
-          setError('Please enter a new password (min 6 characters).');
-          setLoading(false);
-          return;
+        if (resetCode) {
+          // User opened email reset link with resetToken or oobCode -> change password
+          if (!newPassword || newPassword.length < 6) {
+            setError('Please enter a new password (min 6 characters).');
+            setLoading(false);
+            return;
+          }
+          if (newPassword !== confirmNewPassword) {
+            setError('Passwords do not match. Please re-enter.');
+            setLoading(false);
+            return;
+          }
+          const res = await confirmPasswordResetWithCode(resetCode, newPassword, email);
+          if (!res.success) {
+            setError(res.error || 'Password reset failed. The link may have expired or already been used.');
+            setLoading(false);
+            return;
+          }
+          setSuccessMsg('Saved successfully');
+          setResetCode(null);
+          // Clean the query parameters from URL
+          if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+          setMode('login');
+          setPassword(newPassword);
+          setNewPassword('');
+          setConfirmNewPassword('');
+        } else {
+          // User submits email to receive genuine reset link
+          if (!cleanEmail || !cleanEmail.includes('@')) {
+            setError('Please enter a valid email address.');
+            setLoading(false);
+            return;
+          }
+          const res = await sendPasswordResetLink(cleanEmail, role);
+          if (!res.success) {
+            setError(res.error || 'Failed to send password reset email.');
+            setLoading(false);
+            return;
+          }
+          setResetEmailSent(true);
+          if (res.resetLink) {
+            setGeneratedResetLink(res.resetLink);
+          }
+          setSuccessMsg('Check email, reset link sent successfully');
         }
-        const res = await resetPassword(cleanEmail, newPassword);
-        if (!res.success) {
-          setError(res.error || 'Password reset failed.');
-          setLoading(false);
-          return;
-        }
-        setSuccessMsg('Password updated successfully! You can now log in.');
-        setPassword(newPassword);
-        setMode('login');
       }
     } catch (err: any) {
       setError(err?.message || 'An unexpected error occurred. Please try again.');
@@ -493,7 +626,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
                   {mode === 'login' && (isHost ? 'Host Login 🎪' : 'Student Login 🎓')}
                   {mode === 'register' && (isHost ? 'Host Registration 🚀' : 'Student Registration 🚀')}
-                  {mode === 'forgot' && 'Reset Password 🔑'}
+                  {mode === 'forgot' && (resetCode ? 'Set New Password 🔐' : 'Reset Password 🔑')}
                 </h2>
                 <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
                   {mode === 'login' && (isHost 
@@ -502,7 +635,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                   {mode === 'register' && (isHost
                     ? 'Register your college council or club to publish and manage events.'
                     : 'Register your student profile to book passes and enter college fests.')}
-                  {mode === 'forgot' && 'Enter your registered email to set a new password.'}
+                  {mode === 'forgot' && (resetCode
+                    ? 'Enter and confirm your new account password.'
+                    : 'Enter your registered email and we will send a password reset link to it.')}
                 </p>
               </div>
 
@@ -537,6 +672,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                       setMode('login');
                       setError('');
                       setSuccessMsg('');
+                      setConfirmRegisterPassword('');
                     }}
                     className={`flex-1 pb-2.5 text-xs font-bold text-center border-b-2 transition cursor-pointer ${
                       mode === 'login'
@@ -552,6 +688,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                       setMode('register');
                       setError('');
                       setSuccessMsg('');
+                      setConfirmRegisterPassword('');
                     }}
                     className={`flex-1 pb-2.5 text-xs font-bold text-center border-b-2 transition cursor-pointer ${
                       mode === 'register'
@@ -579,8 +716,145 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 </div>
               )}
 
-              {/* Form Elements (NO Role Select Inside Form) */}
-              <form onSubmit={handleSubmit} className="space-y-3.5">
+              {/* MODE FORGOT: Email Sent Confirmation View */}
+              {mode === 'forgot' && resetEmailSent && !resetCode ? (
+                <div className="py-4 text-center space-y-4 animate-fadeIn">
+                  <div className="w-16 h-16 rounded-full bg-emerald-50 border-4 border-emerald-400 text-emerald-600 flex items-center justify-center mx-auto shadow-sm">
+                    <Mail className="w-8 h-8" />
+                  </div>
+
+                  <div>
+                    <h3 className="text-xl font-black text-slate-900">Check Your Email! 📩</h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      A secure password reset link has been dispatched to:
+                    </p>
+                    <div className="mt-2 inline-block px-3.5 py-1.5 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 font-mono font-bold text-xs">
+                      {email.trim().toLowerCase()}
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-left text-xs text-slate-600 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center shrink-0 text-[10px]">1</span>
+                      <span>Open the password reset email in your inbox.</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center shrink-0 text-[10px]">2</span>
+                      <span>Click the <strong>Reset Password</strong> link inside the email.</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center shrink-0 text-[10px]">3</span>
+                      <span>Enter and save your new password to complete the change.</span>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-400">
+                    Didn't receive the email? Check your <strong>Spam / Junk</strong> folder or click resend.
+                  </p>
+
+                  <div className="flex flex-col sm:flex-row gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setResetEmailSent(false);
+                        setMode('login');
+                        setError('');
+                        setSuccessMsg('');
+                      }}
+                      className="flex-1 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs transition shadow-sm cursor-pointer"
+                    >
+                      &larr; Back to Sign In
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setError('');
+                        setLoading(true);
+                        const res = await sendPasswordResetLink(email.trim().toLowerCase(), role);
+                        setLoading(false);
+                        if (res.success) {
+                          setSuccessMsg('Check email, reset link sent successfully');
+                        } else {
+                          setError(res.error || 'Failed to resend link.');
+                        }
+                      }}
+                      disabled={loading}
+                      className="py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition border border-slate-200 cursor-pointer"
+                    >
+                      {loading ? 'Sending...' : 'Resend Link'}
+                    </button>
+                  </div>
+
+                  {generatedResetLink && (
+                    <div className="pt-3 border-t border-slate-200/80 space-y-2">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-500">
+                        <span className="flex items-center gap-1">
+                          <Mail className="w-3.5 h-3.5 text-indigo-600" />
+                          Official Dispatched Reset Link:
+                        </span>
+                        <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md font-semibold border border-emerald-200">
+                          Active (1 Hr)
+                        </span>
+                      </div>
+
+                      <div className="p-2.5 bg-slate-100/90 rounded-xl border border-slate-200 text-left font-mono text-[11px] text-slate-600 flex items-center justify-between gap-2">
+                        <span className="truncate flex-1">{generatedResetLink}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(generatedResetLink);
+                            setCopiedLink(true);
+                            setTimeout(() => setCopiedLink(false), 2500);
+                          }}
+                          className="shrink-0 p-1.5 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-600 hover:text-indigo-600 transition shadow-2xs cursor-pointer flex items-center gap-1 text-[10px] font-sans font-bold"
+                          title="Copy Link"
+                        >
+                          {copiedLink ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                          <span>{copiedLink ? 'Copied' : 'Copy'}</span>
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          window.location.href = generatedResetLink;
+                        }}
+                        className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-indigo-50 to-indigo-100 hover:from-indigo-100 hover:to-indigo-200 text-indigo-700 text-xs font-bold border border-indigo-200 flex items-center justify-center gap-1.5 transition cursor-pointer shadow-2xs"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Open Reset Link (Simulate Opening Email Link)</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Form Elements (NO Role Select Inside Form) */
+                <form onSubmit={handleSubmit} className="space-y-3.5">
+                  {/* Forgot Mode Guidance Notice */}
+                  {mode === 'forgot' && !resetCode && (
+                    <div className="p-3 bg-indigo-50/80 border border-indigo-200 rounded-xl text-xs text-indigo-800 flex items-start gap-2.5">
+                      <Send className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">
+                        Enter your registered {isHost ? 'Host / Organizer' : 'Student'} email address. We will verify your registration and dispatch a secure password reset link to your email inbox.
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Reset Code Verified Notice */}
+                  {mode === 'forgot' && resetCode && (
+                    <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 space-y-1">
+                      <div className="flex items-center gap-1.5 font-bold text-emerald-900">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>Email Reset Link Verified!</span>
+                      </div>
+                      <p className="text-[11px] text-emerald-700">
+                        Account: <strong className="font-mono">{email}</strong> ({isHost ? 'Host Portal' : 'Student Portal'})
+                      </p>
+                      <p className="text-[11px] text-emerald-600">
+                        Please enter and confirm your new password below to update your credentials.
+                      </p>
+                    </div>
+                  )}
                 {/* Full Name (Register only) */}
                 {mode === 'register' && (
                   <div>
@@ -604,61 +878,98 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 )}
 
                 {/* Email Address */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    {isHost ? 'Host / Official Email Address' : 'Student Email Address'}
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                      <Mail className="w-4 h-4" />
+                {/* Email / Mobile Address */}
+                {(mode !== 'forgot' || !resetCode) && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {mode === 'forgot'
+                        ? 'Enter Your Registered Email Address'
+                        : mode === 'login'
+                        ? (isHost ? 'Host Email Address or 10-Digit Mobile' : 'Student Email Address or 10-Digit Mobile')
+                        : (isHost ? 'Host / Official Email Address' : 'Student Email Address')}
+                    </label>
+                    <div className="relative">
+                      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                        <Mail className="w-4 h-4" />
+                      </div>
+                      <input
+                        type="text"
+                        required
+                        placeholder={
+                          mode === 'forgot'
+                            ? 'Enter email to receive reset link'
+                            : mode === 'login'
+                            ? (isHost ? 'council@college.edu or 9876543210' : 'student@college.edu or 9876543210')
+                            : (isHost ? 'council@college.edu' : 'student@college.edu')
+                        }
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition"
+                      />
                     </div>
-                    <input
-                      type="email"
-                      required
-                      placeholder={isHost ? 'council@college.edu' : 'student@college.edu'}
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition"
-                    />
                   </div>
-                </div>
+                )}
 
-                {/* College / Organization & Mobile (Register only) */}
+                {/* Host Organization & Mobile OR Student Mobile (Register only) */}
                 {mode === 'register' && (
-                  <div className="grid grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        {isHost ? 'Host Council / Club' : 'College Name'}
-                      </label>
-                      <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-slate-400">
-                          <School className="w-3.5 h-3.5" />
+                  isHost ? (
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Host Council / Club
+                        </label>
+                        <div className="relative">
+                          <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-slate-400">
+                            <School className="w-3.5 h-3.5" />
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="Event Committee"
+                            value={college}
+                            onChange={(e) => setCollege(e.target.value)}
+                            className="w-full pl-8 pr-2 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition"
+                          />
                         </div>
-                        <input
-                          type="text"
-                          placeholder={isHost ? 'Event Committee' : 'IIT Delhi'}
-                          value={college}
-                          onChange={(e) => setCollege(e.target.value)}
-                          className="w-full pl-8 pr-2 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition"
-                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          Contact Mobile * <span className="text-[10px] text-indigo-600 font-semibold">(10 Digits)</span>
+                        </label>
+                        <div className="relative">
+                          <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-slate-400">
+                            <Phone className="w-3.5 h-3.5" />
+                          </div>
+                          <input
+                            type="tel"
+                            required
+                            placeholder="9876543210"
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value)}
+                            className="w-full pl-8 pr-2 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition"
+                          />
+                        </div>
                       </div>
                     </div>
+                  ) : (
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">Contact Mobile</label>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Contact Mobile * <span className="text-[10px] text-indigo-600 font-semibold">(10 Digits Required)</span>
+                      </label>
                       <div className="relative">
-                        <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none text-slate-400">
-                          <Phone className="w-3.5 h-3.5" />
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                          <Phone className="w-4 h-4" />
                         </div>
                         <input
                           type="tel"
-                          placeholder="9876543210"
+                          required
+                          placeholder="e.g. 9876543210 (10-digit mobile number)"
                           value={phone}
                           onChange={(e) => setPhone(e.target.value)}
-                          className="w-full pl-8 pr-2 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition"
+                          className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition"
                         />
                       </div>
                     </div>
-                  </div>
+                  )
                 )}
 
                 {/* Password field */}
@@ -705,31 +1016,104 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                   </div>
                 )}
 
-                {/* New Password field (Forgot mode only) */}
-                {mode === 'forgot' && (
+                {/* Confirm Password (Register mode only: verify password is typed correctly) */}
+                {mode === 'register' && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">New Password</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Confirm Password</label>
                     <div className="relative">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
                         <Lock className="w-4 h-4" />
                       </div>
                       <input
-                        type={showPassword ? 'text' : 'password'}
+                        type={showConfirmRegisterPassword ? 'text' : 'password'}
                         required
-                        placeholder="Min 6 characters"
-                        value={newPassword}
-                        onFocus={() => setIsPasswordFocused(true)}
-                        onBlur={() => setIsPasswordFocused(false)}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        className="w-full pl-9 pr-9 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition"
+                        placeholder="Re-enter your password to confirm"
+                        value={confirmRegisterPassword}
+                        onChange={(e) => setConfirmRegisterPassword(e.target.value)}
+                        className={`w-full pl-9 pr-9 py-2.5 bg-slate-50 border rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none transition ${
+                          confirmRegisterPassword
+                            ? password === confirmRegisterPassword
+                              ? 'border-emerald-500 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100'
+                              : 'border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-100'
+                            : 'border-slate-200 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100'
+                        }`}
                       />
                       <button
                         type="button"
-                        onClick={() => setShowPassword(!showPassword)}
+                        onClick={() => setShowConfirmRegisterPassword(!showConfirmRegisterPassword)}
                         className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                        title={showConfirmRegisterPassword ? 'Hide password' : 'Show password'}
                       >
-                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        {showConfirmRegisterPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                       </button>
+                    </div>
+                    {confirmRegisterPassword && (
+                      <div className="mt-1 flex items-center gap-1.5 text-[11px] font-medium">
+                        {password === confirmRegisterPassword ? (
+                          <span className="text-emerald-600 flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Passwords match
+                          </span>
+                        ) : (
+                          <span className="text-rose-500 flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3 text-rose-500" /> Passwords do not match
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* New Password and Confirm Password fields (ONLY in forgot mode when resetCode is present) */}
+                {mode === 'forgot' && resetCode && (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">New Password</label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                          <Lock className="w-4 h-4" />
+                        </div>
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          required
+                          placeholder="Min 6 characters"
+                          value={newPassword}
+                          onFocus={() => setIsPasswordFocused(true)}
+                          onBlur={() => setIsPasswordFocused(false)}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          className="w-full pl-9 pr-9 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Confirm New Password</label>
+                      <div className="relative">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                          <Lock className="w-4 h-4" />
+                        </div>
+                        <input
+                          type={showConfirmNewPassword ? 'text' : 'password'}
+                          required
+                          placeholder="Re-enter new password"
+                          value={confirmNewPassword}
+                          onChange={(e) => setConfirmNewPassword(e.target.value)}
+                          className="w-full pl-9 pr-9 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowConfirmNewPassword(!showConfirmNewPassword)}
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          {showConfirmNewPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -751,13 +1135,18 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                       <span>
                         {mode === 'login' && (isHost ? 'Sign In to Host Portal' : 'Sign In to Student Portal')}
                         {mode === 'register' && (isHost ? 'Create Host Account' : 'Create Student Account')}
-                        {mode === 'forgot' && 'Reset & Update Password'}
+                        {mode === 'forgot' && (resetCode ? 'Save New Password & Sign In' : 'Send Password Reset Link')}
                       </span>
-                      <ArrowRight className="w-3.5 h-3.5" />
+                      {mode === 'forgot' && !resetCode ? (
+                        <Send className="w-3.5 h-3.5" />
+                      ) : (
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      )}
                     </>
                   )}
                 </button>
               </form>
+            )}
 
               {/* Back to Login for Forgot Password */}
               {mode === 'forgot' && (
