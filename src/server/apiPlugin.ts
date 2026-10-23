@@ -513,10 +513,13 @@ export function apiServerPlugin(): Plugin {
             }
 
             // 2. Strict portal & role verification for both logins
-            const registeredRole = (account.role || 'student').toLowerCase();
-            if (targetRole && registeredRole !== targetRole) {
-              const currentPortal = targetRole === 'host' ? 'Host / Organizer' : 'Student';
-              const registeredPortal = registeredRole === 'host' ? 'Host / Organizer' : 'Student';
+            const rawRole = (account.role || 'user').toLowerCase();
+            const normalizedRegistered = (rawRole === 'student' || rawRole === 'user') ? 'user' : 'host';
+            const normalizedTarget = (targetRole === 'student' || targetRole === 'user') ? 'user' : (targetRole === 'host' ? 'host' : null);
+            const registeredRole = normalizedRegistered;
+
+            if (normalizedTarget && normalizedRegistered !== normalizedTarget) {
+              const registeredPortal = normalizedRegistered === 'host' ? 'Host / Organizer' : 'Student';
               return sendJson(res, 400, {
                 success: false,
                 error: `"${email}" is registered as a ${registeredPortal} account. Please switch to the ${registeredPortal} login portal to reset your password.`
