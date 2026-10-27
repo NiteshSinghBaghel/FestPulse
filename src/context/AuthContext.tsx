@@ -337,10 +337,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const isNewUser = !existing;
 
       // Preserve previously saved edits from database!
-      const resolvedName = existing?.name || cleanName;
-      const resolvedCollege = existing?.college || college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student');
-      const resolvedPhone = existing?.phone || phone?.trim() || '9876543210';
-      const resolvedPhoto = existing?.photoURL || photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(resolvedName)}`;
+      const resolvedName = (existing && existing.name) ? existing.name : cleanName;
+      const resolvedCollege = (existing && existing.college) ? existing.college : (college?.trim() || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'));
+      const resolvedPhone = (existing && existing.phone && existing.phone.trim().length > 0) ? existing.phone.trim() : (phone?.trim() || '');
+      const resolvedPhoto = (existing && existing.photoURL) ? existing.photoURL : (photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(resolvedName)}`);
 
       const token = await JwtService.createToken({
         uid: existing?.uid || uid,
@@ -375,8 +375,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         college: userProfile.college,
         phone: userProfile.phone,
         photoURL: userProfile.photoURL,
+        password: existing?.password,
         authProvider: userProfile.authProvider || 'google',
         createdAt: userProfile.createdAt,
+        updatedAt: new Date().toISOString(),
       });
 
       FirebaseDbService.saveUserProfile(userProfile).catch(() => {});

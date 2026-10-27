@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { StorageService } from '../services/storageService';
 import { FestLogo } from '../components/FestLogo';
 import { UserRole } from '../types';
 import { firebaseVerifyPasswordResetCode, getFirebaseErrorMessage } from '../services/firebase';
@@ -168,17 +169,21 @@ export const AuthPage: React.FC<AuthPageProps> = ({
 
     try {
       const demoEmail = demoRole === 'host' ? 'host@campusfest.org' : 'student@college.edu';
-      const demoName = demoRole === 'host' ? 'Cultural Committee Head' : 'Aarav Sharma';
-      const demoCollege = demoRole === 'host' ? 'IIT Delhi Event Council' : 'IIT Delhi (CS Dept)';
+      // Query database fresh to preserve any user-saved updates (name, phone, college)
+      const existing = await StorageService.findAccountByIdentifierAsync(demoEmail, true);
+      
+      const demoName = existing?.name || (demoRole === 'host' ? 'Cultural Committee Head' : 'Aarav Sharma');
+      const demoCollege = existing?.college || (demoRole === 'host' ? 'IIT Delhi Event Council' : 'IIT Delhi (CS Dept)');
+      const demoPhone = existing?.phone || '9876543210';
 
       const res = await loginWithGoogle(
         demoName,
         demoEmail,
         demoRole,
-        `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(demoName)}`,
-        `demo_${demoRole}_uid`,
+        existing?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(demoName)}`,
+        existing?.uid || `demo_${demoRole}_uid`,
         demoCollege,
-        '9876543210'
+        demoPhone
       );
 
       if (res.success) {
@@ -198,11 +203,23 @@ export const AuthPage: React.FC<AuthPageProps> = ({
     setError('');
     setSuccessMsg('');
 
-    const cleanEmail = email.trim().toLowerCase();
+    const rawInput = email.trim();
+    const cleanDigits = rawInput.replace(/[\s\-()+]/g, '');
+    const isPhone = cleanDigits.length === 10 && /^[0-9]{10}$/.test(cleanDigits);
+    const isEmail = rawInput.includes('@');
+    const cleanEmail = isEmail ? rawInput.toLowerCase() : rawInput;
 
-    if (!cleanEmail || !cleanEmail.includes('@')) {
-      setError('Please enter a valid email address.');
-      return;
+    // Login mode accepts EITHER a valid email address OR a 10-digit mobile number
+    if (mode === 'login') {
+      if (!isEmail && !isPhone) {
+        setError('Please enter a valid email address or 10-digit mobile number.');
+        return;
+      }
+    } else {
+      if (!isEmail) {
+        setError('Please enter a valid email address.');
+        return;
+      }
     }
 
     setLoading(true);

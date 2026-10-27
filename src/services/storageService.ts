@@ -67,7 +67,23 @@ export class StorageService {
         this.saveEvents(fbEvents || []);
         this.saveTickets(fbTickets || []);
         this.savePayments(fbPayments || []);
-        this.saveRegisteredAccounts(fbAccounts || []);
+
+        // Merge accounts from Firestore so locally registered & updated accounts are never wiped
+        if (fbAccounts && Array.isArray(fbAccounts) && fbAccounts.length > 0) {
+          const localAccs = this.getRegisteredAccounts();
+          const accMap = new Map<string, RegisteredAccount>();
+          localAccs.forEach(a => {
+            if (a && a.email) accMap.set(a.uid || a.email.toLowerCase().trim(), a);
+          });
+          fbAccounts.forEach(a => {
+            if (a && a.email) {
+              const key = a.uid || a.email.toLowerCase().trim();
+              const existing = accMap.get(key);
+              accMap.set(key, { ...existing, ...a });
+            }
+          });
+          this.saveRegisteredAccounts(Array.from(accMap.values()));
+        }
         
         // Payouts: Merge cloud and local payouts so settlements are never reset or lost
         const localPayouts = this.getPayouts();
@@ -92,16 +108,32 @@ export class StorageService {
             }
           }
         }
-
-        return {
-          eventsCount: (fbEvents || []).length,
-          ticketsCount: (fbTickets || []).length,
-        };
       } catch (fbErr) {
         console.warn('[Sync] Firestore sync warning:', fbErr);
       }
 
-      // 2. Local development fallback if Firestore is not accessible
+      // 2. Always sync accounts & data from server database (/api/accounts & /api/sync)
+      try {
+        const res = await fetch('/api/accounts');
+        if (res.ok) {
+          const serverAccounts: RegisteredAccount[] = await res.json();
+          if (Array.isArray(serverAccounts) && serverAccounts.length > 0) {
+            const currentAccs = this.getRegisteredAccounts();
+            const accMap = new Map<string, RegisteredAccount>();
+            currentAccs.forEach(a => {
+              if (a && a.email) accMap.set(a.uid || a.email.toLowerCase().trim(), a);
+            });
+            serverAccounts.forEach(a => {
+              if (a && a.email) {
+                const key = a.uid || a.email.toLowerCase().trim();
+                const existing = accMap.get(key);
+                accMap.set(key, { ...existing, ...a });
+              }
+            });
+            this.saveRegisteredAccounts(Array.from(accMap.values()));
+          }
+        }
+      } catch {}
       try {
         const res = await fetch('/api/sync');
         if (res.ok) {
@@ -842,28 +874,50 @@ export class StorageService {
   ): Promise<RegisteredAccount> {
     const cleanOldEmail = oldEmail.toLowerCase().trim();
     const cleanNewEmail = updates.email.toLowerCase().trim();
-    const accounts = this.getRegisteredAccounts();
+    let accounts = this.getRegisteredAccounts();
     
     let idx = accounts.findIndex(
       a => (userId && a.uid === userId) || a.email.toLowerCase().trim() === cleanOldEmail
     );
 
+    // If not found in local cache, check server database first before creating a partial account!
+    let existingServerAccount: RegisteredAccount | undefined;
+    if (idx === -1) {
+      try {
+        const res = await fetch('/api/accounts');
+        if (res.ok) {
+          const serverAccs: RegisteredAccount[] = await res.json();
+          if (Array.isArray(serverAccs)) {
+            existingServerAccount = serverAccs.find(
+              a => (userId && a.uid === userId) || a.email.toLowerCase().trim() === cleanOldEmail
+            );
+            if (existingServerAccount) {
+              accounts.push(existingServerAccount);
+              idx = accounts.length - 1;
+            }
+          }
+        }
+      } catch {}
+    }
+
     let updatedAccount: RegisteredAccount;
 
     if (idx >= 0) {
+      const base = accounts[idx];
       updatedAccount = {
-        ...accounts[idx],
-        uid: userId || accounts[idx].uid,
+        ...base,
+        uid: userId || base.uid,
         name: updates.name.trim(),
         email: cleanNewEmail,
-        phone: updates.phone !== undefined ? updates.phone.trim() : accounts[idx].phone,
-        college: updates.college !== undefined ? updates.college.trim() : accounts[idx].college,
-        photoURL: updates.photoURL || accounts[idx].photoURL,
+        phone: updates.phone !== undefined ? updates.phone.trim() : (base.phone || ''),
+        college: updates.college !== undefined ? updates.college.trim() : (base.college || ''),
+        photoURL: updates.photoURL || base.photoURL,
+        updatedAt: new Date().toISOString(),
       };
       accounts[idx] = updatedAccount;
     } else {
       updatedAccount = {
-        uid: userId,
+        uid: userId || `usr_${Date.now().toString(36)}`,
         name: updates.name.trim(),
         email: cleanNewEmail,
         phone: updates.phone?.trim() || '',
@@ -872,6 +926,7 @@ export class StorageService {
         authProvider: 'email',
         role: 'user',
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
       accounts.push(updatedAccount);
     }
