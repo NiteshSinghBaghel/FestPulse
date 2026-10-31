@@ -62,11 +62,32 @@ export class StorageService {
           FirebaseDbService.getPayouts(),
         ]);
 
-        // Firestore is authoritative: mirror exactly what exists in Firestore.
-        // If Firestore is empty (0 events, 0 tickets), local cache is emptied accordingly.
-        this.saveEvents(fbEvents || []);
-        this.saveTickets(fbTickets || []);
-        this.savePayments(fbPayments || []);
+        // Merge events non-destructively: preserve local events and add cloud events
+        if (fbEvents && Array.isArray(fbEvents) && fbEvents.length > 0) {
+          const currentEvents = this.getEvents();
+          const eventMap = new Map<string, CollegeEvent>();
+          currentEvents.forEach(e => { if (e && e.eventId) eventMap.set(e.eventId, e); });
+          fbEvents.forEach(e => { if (e && e.eventId) eventMap.set(e.eventId, e); });
+          this.saveEvents(Array.from(eventMap.values()));
+        }
+
+        // Merge tickets non-destructively: preserve local tickets and add cloud tickets
+        if (fbTickets && Array.isArray(fbTickets) && fbTickets.length > 0) {
+          const currentTickets = this.getTickets();
+          const ticketMap = new Map<string, Ticket>();
+          currentTickets.forEach(t => { if (t && t.ticketId) ticketMap.set(t.ticketId, t); });
+          fbTickets.forEach(t => { if (t && t.ticketId) ticketMap.set(t.ticketId, t); });
+          this.saveTickets(Array.from(ticketMap.values()));
+        }
+
+        // Merge payments non-destructively
+        if (fbPayments && Array.isArray(fbPayments) && fbPayments.length > 0) {
+          const currentPayments = this.getPayments();
+          const paymentMap = new Map<string, PaymentRecord>();
+          currentPayments.forEach(p => { if (p && p.paymentId) paymentMap.set(p.paymentId, p); });
+          fbPayments.forEach(p => { if (p && p.paymentId) paymentMap.set(p.paymentId, p); });
+          this.savePayments(Array.from(paymentMap.values()));
+        }
 
         // Merge accounts from Firestore so locally registered & updated accounts are never wiped
         if (fbAccounts && Array.isArray(fbAccounts) && fbAccounts.length > 0) {
@@ -138,8 +159,20 @@ export class StorageService {
         const res = await fetch('/api/sync');
         if (res.ok) {
           const syncData = await res.json();
-          if (Array.isArray(syncData.events)) this.saveEvents(syncData.events);
-          if (Array.isArray(syncData.tickets)) this.saveTickets(syncData.tickets);
+          if (Array.isArray(syncData.events) && syncData.events.length > 0) {
+            const currentEvents = this.getEvents();
+            const eventMap = new Map<string, CollegeEvent>();
+            currentEvents.forEach(e => { if (e && e.eventId) eventMap.set(e.eventId, e); });
+            syncData.events.forEach((e: CollegeEvent) => { if (e && e.eventId) eventMap.set(e.eventId, e); });
+            this.saveEvents(Array.from(eventMap.values()));
+          }
+          if (Array.isArray(syncData.tickets) && syncData.tickets.length > 0) {
+            const currentTickets = this.getTickets();
+            const ticketMap = new Map<string, Ticket>();
+            currentTickets.forEach(t => { if (t && t.ticketId) ticketMap.set(t.ticketId, t); });
+            syncData.tickets.forEach((t: Ticket) => { if (t && t.ticketId) ticketMap.set(t.ticketId, t); });
+            this.saveTickets(Array.from(ticketMap.values()));
+          }
           if (Array.isArray(syncData.accounts)) this.saveRegisteredAccounts(syncData.accounts);
           if (Array.isArray(syncData.payouts) && syncData.payouts.length > 0) {
             const current = this.getPayouts();

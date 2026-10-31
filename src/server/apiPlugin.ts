@@ -156,18 +156,14 @@ function sendJson(res: any, statusCode: number, data: any) {
   res.end(JSON.stringify(data));
 }
 
-export function apiServerPlugin(): Plugin {
-  return {
-    name: 'campuspass-api-server',
-    configureServer(server) {
-      server.middlewares.use(async (req, res, next) => {
-        const url = req.url || '';
-        if (!url.startsWith('/api/')) {
-          return next();
-        }
+const apiMiddleware = async (req: any, res: any, next: any) => {
+  const url = req.url || '';
+  if (!url.startsWith('/api/')) {
+    return next();
+  }
 
-        // Handle CORS preflight
-        if (req.method === 'OPTIONS') {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
           res.statusCode = 204;
           res.setHeader('Access-Control-Allow-Origin', '*');
           res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -175,9 +171,10 @@ export function apiServerPlugin(): Plugin {
           return res.end();
         }
 
-        const db = loadDatabase();
+        try {
+          const db = loadDatabase();
 
-        // 1. Health check
+          // 1. Health check
         if (url === '/api/health' && req.method === 'GET') {
           const pgStatus = await PostgresService.getStatus();
           return sendJson(res, 200, {
@@ -1181,7 +1178,20 @@ export function apiServerPlugin(): Plugin {
 
         // Fallback for unmatched API routes
         return sendJson(res, 404, { error: 'Endpoint not found' });
-      });
+      } catch (error: any) {
+        console.error('[API Server] Unhandled error:', error);
+        return sendJson(res, 500, { error: error?.message || 'Internal Server Error' });
+      }
+    };
+
+export function apiServerPlugin(): Plugin {
+  return {
+    name: 'campuspass-api-server',
+    configureServer(server) {
+      server.middlewares.use(apiMiddleware);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(apiMiddleware);
     },
   };
 }
