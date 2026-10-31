@@ -1,12 +1,12 @@
 {
-  "projectId": "my-fest-app",
-  "appId": "1:280610666444:web:eff8923a0fdfbc49f98f69",
-  "apiKey": "AIzaSyCygh3tWfYEJuGlZnvRymsJnB8AB-JH10k",
-  "authDomain": "my-fest-app.firebaseapp.com",
-  "firestoreDatabaseId": "(default)",
-  "storageBucket": "my-fest-app.firebasestorage.app",
-  "messagingSenderId": "280610666444",
-  "measurementId": "G-NL8GLGZDX7",
-  "oAuthClientId": "",
+  "projectId": "gen-lang-client-0469435316",
+  "appId": "1:830924590831:web:9f18531ac41ba8c6d3d51a",
+  "apiKey": "AIzaSyAjgp4pxKboY24njR50CQ_3mYZ-z5Wm2QM",
+  "authDomain": "gen-lang-client-0469435316.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-campuspass-384a3ad7-9c41-4a97-87f4-7bd963043a29",
+  "storageBucket": "gen-lang-client-0469435316.firebasestorage.app",
+  "messagingSenderId": "830924590831",
+  "measurementId": "",
+  "oAuthClientId": "830924590831-6o0cm82ndh847d9hfp2v6a5ngdvge9br.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }
