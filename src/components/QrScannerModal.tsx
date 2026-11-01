@@ -18,7 +18,8 @@ import {
   RefreshCw,
   Search,
   UserCheck,
-  FileCheck
+  FileCheck,
+  ShieldAlert
 } from 'lucide-react';
 import { ManualVerifyModal } from './ManualVerifyModal';
 
@@ -29,7 +30,7 @@ interface QrScannerModalProps {
   prefilledTicket?: Ticket | null;
 }
 
-type FeedbackType = 'verified' | 'already_entered' | 'invalid' | null;
+type FeedbackType = 'verified' | 'already_entered' | 'invalid' | 'unauthorized_host' | null;
 
 export const QrScannerModal: React.FC<QrScannerModalProps> = ({
   isOpen,
@@ -233,7 +234,8 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
     setIsProcessing(true);
 
     const hostId = currentUser?.uid || '';
-    const result = StorageService.verifyAndProcessScan(token.trim(), hostId);
+    const hostEmail = currentUser?.email || '';
+    const result = StorageService.verifyAndProcessScan(token.trim(), hostId, hostEmail);
     setIsProcessing(false);
 
     // Record last scanned ticket for preview
@@ -244,7 +246,20 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
     // Refresh Recent Entries list immediately
     loadRecentEntries();
 
-    if (result.code === 'ALREADY_ENTERED') {
+    if (result.code === 'WRONG_HOST_OR_EVENT') {
+      // Unauthorized: Ticket belongs to an event created by another organizer!
+      playSound('error');
+      setFeedbackState('unauthorized_host');
+      setActiveScannedTicket(result.ticket || null);
+      setFeedbackMessage(result.message || 'Unauthorized Scanner: This ticket was created by another organizer!');
+      isScanningActiveRef.current = false;
+      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+      feedbackTimeoutRef.current = setTimeout(() => {
+        setFeedbackState(null);
+        isScanningActiveRef.current = true;
+        scanFrame(); // Automatically resume scanning
+      }, 3500);
+    } else if (result.code === 'ALREADY_ENTERED') {
       // 1. Already entered -> Show Red X sign & 'ALREADY ENTER' for 2 seconds
       playSound('error');
       setFeedbackState('already_entered');
@@ -519,6 +534,32 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
               </span>
             </div>
           )}
+
+          {/* 4. UNAUTHORIZED ORGANIZER (Amber Alert for 3.5 seconds) */}
+          {feedbackState === 'unauthorized_host' && (
+            <div className="absolute inset-0 bg-[#3a1a05]/95 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-20 animate-scale-in">
+              <div className="w-16 h-16 rounded-full bg-amber-500/20 border-4 border-amber-500 text-amber-500 flex items-center justify-center shadow-2xl mb-2">
+                <ShieldAlert className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-black text-amber-400 tracking-tight">
+                UNAUTHORIZED SCANNER
+              </h2>
+              <p className="text-xs text-amber-100 font-bold mt-1.5 max-w-sm leading-relaxed">
+                {feedbackMessage}
+              </p>
+              {activeScannedTicket && (
+                <div className="mt-2.5 px-3 py-1.5 bg-amber-950/70 rounded-xl border border-amber-700/50 text-[11px] text-amber-200">
+                  Ticket Event: <b className="text-white">{activeScannedTicket.eventTitle}</b>
+                </div>
+              )}
+              <div className="mt-3 w-40 h-1.5 bg-amber-950 rounded-full overflow-hidden">
+                <div className="h-full bg-amber-500 rounded-full animate-pulse" style={{ width: '100%' }} />
+              </div>
+              <span className="text-[10px] text-amber-300 mt-1.5 font-medium">
+                Resuming camera in 3.5 seconds...
+              </span>
+            </div>
+          )}
         </div>
 
         {/* ================= QUICK MANUAL VERIFY ROW (LIGHT THEME) ================= */}
@@ -629,6 +670,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
         isOpen={isManualModalOpen}
         onClose={() => setIsManualModalOpen(false)}
         hostId={currentUser?.uid || ''}
+        hostEmail={currentUser?.email || ''}
         onVerifiedSuccess={(ticket) => {
           loadRecentEntries();
           onScanSuccess?.();

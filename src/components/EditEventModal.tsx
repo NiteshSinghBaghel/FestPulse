@@ -133,7 +133,7 @@ export const EditEventModal: React.FC<EditEventModalProps> = ({
         rules: rules.split('\n').map(r => r.trim()).filter(Boolean),
         amenities: amenities.split(',').map(a => a.trim()).filter(Boolean),
         hostPhone: hostPhone.trim() || event.hostPhone,
-      });
+      }, currentUser?.uid, currentUser?.email);
 
       onEventUpdated(updated);
       onClose();

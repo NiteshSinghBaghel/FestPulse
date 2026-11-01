@@ -347,6 +347,21 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (idx === -1) {
               return sendJson(res, 404, { error: 'Event not found' });
             }
+
+            const currentEvent = db.events[idx];
+            if (updates.requestingHostId || updates.requestingHostEmail) {
+              const isOwner = Boolean(
+                (updates.requestingHostId && currentEvent.hostId === updates.requestingHostId) ||
+                (updates.requestingHostEmail && currentEvent.hostEmail && currentEvent.hostEmail.toLowerCase().trim() === updates.requestingHostEmail.toLowerCase().trim())
+              );
+              if (!isOwner) {
+                return sendJson(res, 403, { error: "Unauthorized: You cannot edit another organizer's event." });
+              }
+            }
+
+            delete updates.requestingHostId;
+            delete updates.requestingHostEmail;
+
             db.events[idx] = { ...db.events[idx], ...updates, updatedAt: new Date().toISOString() };
             saveDatabase(db);
             if (PostgresService.getConnected()) {
@@ -355,6 +370,18 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             return sendJson(res, 200, { success: true, event: db.events[idx] });
           }
           if (req.method === 'DELETE') {
+            const body = await parseBody(req).catch(() => ({}));
+            const currentEvent = db.events.find(e => e.eventId === eventId);
+            if (currentEvent && (body?.requestingHostId || body?.requestingHostEmail)) {
+              const isOwner = Boolean(
+                (body.requestingHostId && currentEvent.hostId === body.requestingHostId) ||
+                (body.requestingHostEmail && currentEvent.hostEmail && currentEvent.hostEmail.toLowerCase().trim() === body.requestingHostEmail.toLowerCase().trim())
+              );
+              if (!isOwner) {
+                return sendJson(res, 403, { error: "Unauthorized: You cannot delete another organizer's event." });
+              }
+            }
+
             db.events = db.events.filter((e) => e.eventId !== eventId);
             saveDatabase(db);
             if (PostgresService.getConnected()) {
@@ -364,7 +391,79 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           }
         }
 
-        // 4. Tickets endpoints
+        // 4. Dedicated Ticket Gate Verification with Strict Host & Event Check
+        if (url === '/api/tickets/verify' && req.method === 'POST') {
+          const body = await parseBody(req);
+          const { qrToken, ticketId, hostId, hostEmail } = body;
+          const token = (qrToken || ticketId || '').trim();
+
+          if (!token) {
+            return sendJson(res, 400, { success: false, error: 'QR Token or Ticket ID is required', code: 'INVALID_TOKEN' });
+          }
+
+          const ticket = db.tickets.find((t: any) => t.qrToken === token || t.ticketId === token);
+          if (!ticket) {
+            return sendJson(res, 404, { success: false, error: 'Invalid Ticket QR. No matching ticket found in database.', code: 'INVALID_TOKEN' });
+          }
+
+          const event = db.events.find((e: any) => e.eventId === ticket.eventId);
+
+          // STRICT HOST VERIFICATION
+          const normalizedHostId = hostId?.trim();
+          const normalizedHostEmail = hostEmail?.toLowerCase().trim();
+          const isAuthorizedOrganizer = Boolean(
+            (normalizedHostId && ticket.hostId && ticket.hostId === normalizedHostId) ||
+            (normalizedHostId && event && event.hostId === normalizedHostId) ||
+            (normalizedHostEmail && event && event.hostEmail && event.hostEmail.toLowerCase().trim() === normalizedHostEmail)
+          );
+
+          if (!isAuthorizedOrganizer) {
+            const eventName = ticket.eventTitle || event?.title || 'an event';
+            return sendJson(res, 403, {
+              success: false,
+              error: `UNAUTHORIZED SCANNER! This pass belongs to "${eventName}" created by a different organizer. Only the organizer of this event can scan and verify this pass.`,
+              code: 'WRONG_HOST_OR_EVENT',
+              ticket
+            });
+          }
+
+          if (ticket.status === 'cancelled' || ticket.status === 'refunded') {
+            return sendJson(res, 400, {
+              success: false,
+              error: `Ticket is ${ticket.status.toUpperCase()} and cannot be used.`,
+              code: 'TICKET_CANCELLED',
+              ticket
+            });
+          }
+
+          if (ticket.entryStatus === 'entered') {
+            return sendJson(res, 400, {
+              success: false,
+              error: `ALREADY USED! Checked in at ${ticket.entryTime || 'earlier today'}. Duplicate entry rejected!`,
+              code: 'ALREADY_ENTERED',
+              ticket
+            });
+          }
+
+          const nowIso = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          ticket.entryStatus = 'entered';
+          ticket.entryTime = nowIso;
+          ticket.exitStatus = 'not_exited';
+          saveDatabase(db);
+
+          if (PostgresService.getConnected()) {
+            PostgresService.upsertTicket(ticket).catch(() => {});
+          }
+
+          return sendJson(res, 200, {
+            success: true,
+            message: `ENTRY GRANTED! Welcome ${ticket.userName}. Pass verified successfully.`,
+            ticket,
+            code: 'VALID'
+          });
+        }
+
+        // 4b. Tickets endpoints
         if (url === '/api/tickets') {
           if (req.method === 'GET') {
             return sendJson(res, 200, db.tickets);
@@ -396,6 +495,28 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (idx === -1) {
               return sendJson(res, 404, { error: 'Ticket not found' });
             }
+
+            const currentTicket = db.tickets[idx];
+            const event = db.events.find((e) => e.eventId === currentTicket.eventId);
+
+            // If updating check-in status, enforce host authorization
+            if (updates.requestingHostId || updates.requestingHostEmail) {
+              const isOwner = Boolean(
+                (updates.requestingHostId && currentTicket.hostId === updates.requestingHostId) ||
+                (updates.requestingHostId && event && event.hostId === updates.requestingHostId) ||
+                (updates.requestingHostEmail && event && event.hostEmail && event.hostEmail.toLowerCase().trim() === updates.requestingHostEmail.toLowerCase().trim())
+              );
+              if (!isOwner) {
+                return sendJson(res, 403, {
+                  error: 'Unauthorized: You cannot check in tickets for events created by another organizer.',
+                  code: 'WRONG_HOST_OR_EVENT'
+                });
+              }
+            }
+
+            delete updates.requestingHostId;
+            delete updates.requestingHostEmail;
+
             db.tickets[idx] = { ...db.tickets[idx], ...updates };
             saveDatabase(db);
             if (PostgresService.getConnected()) {

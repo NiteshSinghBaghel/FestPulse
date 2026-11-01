@@ -94,9 +94,9 @@ export const App: React.FC = () => {
     setEvents(evts);
     if (currentUser) {
       if (role === 'host') {
-        setTickets(StorageService.getHostAttendees(currentUser.uid));
+        setTickets(StorageService.getHostAttendees(currentUser.uid, currentUser.email));
       } else {
-        setTickets(StorageService.getUserTickets(currentUser.uid));
+        setTickets(StorageService.getUserTickets(currentUser.uid, currentUser.email));
       }
     }
   };

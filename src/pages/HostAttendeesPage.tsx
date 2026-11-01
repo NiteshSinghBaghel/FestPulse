@@ -64,34 +64,24 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
     };
   }, []);
 
-  // Filter events belonging to this host
+  // Filter events belonging ONLY to this host - strictly isolated
   const hostEvents = allEvents.filter((e) => {
     if (currentUser?.uid && e.hostId === currentUser.uid) return true;
-    if (
-      currentUser?.role === 'host' &&
-      (!e.hostId || e.hostId === 'demo_host_uid' || !allEvents.some(ev => ev.hostId === currentUser.uid))
-    ) {
-      return true;
-    }
+    if (currentUser?.email && e.hostEmail && e.hostEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim()) return true;
     return false;
   });
 
-  // Host tickets across all host events
+  // Host tickets strictly belonging to this host's events
+  const hostEventIds = new Set(hostEvents.map((e) => e.eventId));
   const hostTickets = allTickets.filter((t) => {
     if (currentUser?.uid && t.hostId === currentUser.uid) return true;
-    if (hostEvents.some((e) => e.eventId === t.eventId)) return true;
-    if (
-      currentUser?.role === 'host' &&
-      (!t.hostId || t.hostId === 'demo_host_uid' || !allTickets.some(tk => tk.hostId === currentUser?.uid))
-    ) {
-      return true;
-    }
+    if (hostEventIds.has(t.eventId)) return true;
     return false;
   });
 
   // Active event object if a specific event is selected
   const activeEvent = selectedEventId !== 'ALL'
-    ? hostEvents.find((e) => e.eventId === selectedEventId) || allEvents.find((e) => e.eventId === selectedEventId)
+    ? hostEvents.find((e) => e.eventId === selectedEventId)
     : null;
 
   // Helpline edit state

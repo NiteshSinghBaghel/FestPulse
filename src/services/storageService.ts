@@ -267,22 +267,37 @@ export class StorageService {
     return newEvent;
   }
 
-  static updateEvent(eventId: string, updates: Partial<CollegeEvent>): CollegeEvent {
+  static updateEvent(
+    eventId: string,
+    updates: Partial<CollegeEvent>,
+    requestingHostId?: string,
+    requestingHostEmail?: string
+  ): CollegeEvent {
     const events = this.getEvents();
     const idx = events.findIndex(e => e.eventId === eventId);
     if (idx === -1) throw new Error('Event not found');
-    
+
+    const currentEvt = events[idx];
+    if (requestingHostId || requestingHostEmail) {
+      const isOwner =
+        (requestingHostId && currentEvt.hostId === requestingHostId) ||
+        (requestingHostEmail && currentEvt.hostEmail && currentEvt.hostEmail.toLowerCase().trim() === requestingHostEmail.toLowerCase().trim());
+      if (!isOwner) {
+        throw new Error('Unauthorized: You cannot edit an event created by another organizer.');
+      }
+    }
+
     const updated = {
-      ...events[idx],
+      ...currentEvt,
       ...updates,
       updatedAt: new Date().toISOString(),
     };
-    
+
     // Auto sync sold out
     if (updated.availableTickets <= 0) {
       updated.status = 'sold_out';
     }
-    
+
     events[idx] = updated;
     this.saveEvents(events);
 
@@ -290,7 +305,7 @@ export class StorageService {
     fetch(`/api/events/${eventId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
+      body: JSON.stringify({ ...updates, requestingHostId, requestingHostEmail }),
     }).catch(e => console.warn('Cloud API updateEvent warning:', e));
 
     // 2. Sync to Firestore
@@ -299,13 +314,30 @@ export class StorageService {
     return updated;
   }
 
-  static deleteEvent(eventId: string): void {
-    const events = this.getEvents().filter(e => e.eventId !== eventId);
-    this.saveEvents(events);
+  static deleteEvent(
+    eventId: string,
+    requestingHostId?: string,
+    requestingHostEmail?: string
+  ): void {
+    const events = this.getEvents();
+    const evt = events.find(e => e.eventId === eventId);
+    if (evt && (requestingHostId || requestingHostEmail)) {
+      const isOwner =
+        (requestingHostId && evt.hostId === requestingHostId) ||
+        (requestingHostEmail && evt.hostEmail && evt.hostEmail.toLowerCase().trim() === requestingHostEmail.toLowerCase().trim());
+      if (!isOwner) {
+        throw new Error('Unauthorized: You cannot delete an event created by another organizer.');
+      }
+    }
+
+    const filtered = events.filter(e => e.eventId !== eventId);
+    this.saveEvents(filtered);
 
     // 1. Delete on Cloud Server API
     fetch(`/api/events/${eventId}`, {
       method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestingHostId, requestingHostEmail }),
     }).catch(e => console.warn('Cloud API deleteEvent warning:', e));
 
     // 2. Delete on Firestore
@@ -420,16 +452,32 @@ export class StorageService {
     FirebaseDbService.saveTicket(ticket).catch(e => console.warn('Cloud saveTicket error:', e));
   }
 
-  static getUserTickets(userId: string): Ticket[] {
-    return this.getTickets().filter(t => t.userId === userId);
+  static getUserTickets(userId: string, userEmail?: string): Ticket[] {
+    const cleanEmail = userEmail?.toLowerCase().trim();
+    return this.getTickets().filter(t => {
+      if (userId && t.userId === userId) return true;
+      if (cleanEmail && t.userEmail && t.userEmail.toLowerCase().trim() === cleanEmail) return true;
+      return false;
+    });
   }
 
   static getEventAttendees(eventId: string): Ticket[] {
     return this.getTickets().filter(t => t.eventId === eventId);
   }
 
-  static getHostAttendees(hostId: string): Ticket[] {
-    return this.getTickets().filter(t => t.hostId === hostId);
+  static getHostAttendees(hostId: string, hostEmail?: string): Ticket[] {
+    const cleanEmail = hostEmail?.toLowerCase().trim();
+    const events = this.getEvents();
+    const hostEventIds = new Set(
+      events
+        .filter(e => (hostId && e.hostId === hostId) || (cleanEmail && e.hostEmail && e.hostEmail.toLowerCase().trim() === cleanEmail))
+        .map(e => e.eventId)
+    );
+    return this.getTickets().filter(t => {
+      if (hostId && t.hostId === hostId) return true;
+      if (hostEventIds.has(t.eventId)) return true;
+      return false;
+    });
   }
 
   static getTicketById(ticketId: string): Ticket | undefined {
@@ -440,10 +488,11 @@ export class StorageService {
     return this.getTickets().find(t => t.qrToken === token || t.ticketId === token);
   }
 
-  // Scanner Verification: Strictly Entry-Only Gate Verification
+  // Scanner Verification: Strictly Entry-Only Gate Verification with Strict Host & Event Ownership Check
   static verifyAndProcessScan(
     qrToken: string,
     currentHostId: string,
+    currentHostEmail?: string,
     _legacyMode?: 'entry' | 'exit'
   ): ScannerScanResult {
     const tickets = this.getTickets();
@@ -458,6 +507,28 @@ export class StorageService {
     }
 
     const ticket = tickets[ticketIndex];
+    const event = this.getEventById(ticket.eventId);
+
+    // CRITICAL SECURITY ENFORCEMENT:
+    // Only the organizer who created this event (matching hostId or hostEmail) can scan this ticket!
+    const normalizedHostId = currentHostId?.trim();
+    const normalizedHostEmail = currentHostEmail?.toLowerCase().trim();
+
+    const isAuthorizedOrganizer = Boolean(
+      (normalizedHostId && ticket.hostId && ticket.hostId === normalizedHostId) ||
+      (normalizedHostId && event && event.hostId === normalizedHostId) ||
+      (normalizedHostEmail && event && event.hostEmail && event.hostEmail.toLowerCase().trim() === normalizedHostEmail)
+    );
+
+    if (!isAuthorizedOrganizer) {
+      const eventName = ticket.eventTitle || event?.title || 'Another Event';
+      return {
+        success: false,
+        message: `UNAUTHORIZED SCANNER! This pass belongs to "${eventName}" created by a different organizer. Only the organizer of this event can scan and verify this pass.`,
+        ticket,
+        code: 'WRONG_HOST_OR_EVENT'
+      };
+    }
 
     // Check status
     if (ticket.status === 'cancelled' || ticket.status === 'refunded') {
@@ -467,11 +538,6 @@ export class StorageService {
         ticket,
         code: 'TICKET_CANCELLED'
       };
-    }
-
-    // Host check - gate scanner allows valid event verification
-    if (ticket.hostId !== currentHostId && currentHostId && currentHostId !== 'scanner-gate') {
-      // Allow verification with event notice
     }
 
     const nowIso = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -493,6 +559,7 @@ export class StorageService {
       entryTime: nowIso,
       exitStatus: 'not_exited'
     };
+
     tickets[ticketIndex] = updatedTicket;
     this.saveTickets(tickets);
 
@@ -503,7 +570,9 @@ export class StorageService {
       body: JSON.stringify({
         entryStatus: 'entered',
         entryTime: nowIso,
-        exitStatus: 'not_exited'
+        exitStatus: 'not_exited',
+        requestingHostId: currentHostId,
+        requestingHostEmail: currentHostEmail
       }),
     }).catch(() => {});
 

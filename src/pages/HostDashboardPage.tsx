@@ -83,24 +83,29 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     };
   }, []);
 
-  // Filter events for this host: match hostId or if user is host and managing college events
-  const hostEvents = events.filter((e) => {
-    if (currentUser?.uid && e.hostId === currentUser.uid) return true;
-    if (currentUser?.role === 'host' && (!e.hostId || e.hostId === 'demo_host_uid' || !events.some(ev => ev.hostId === currentUser.uid))) {
-      return true;
-    }
-    return false;
-  });
+  // Filter events for this host: ONLY match this host's uid or email! Never leak other organizers' events!
+  const hostEvents = useMemo(() => {
+    if (!currentUser?.uid) return [];
+    const uid = currentUser.uid;
+    const email = currentUser.email?.toLowerCase().trim();
+    return events.filter((e) => {
+      if (e.hostId === uid) return true;
+      if (email && e.hostEmail && e.hostEmail.toLowerCase().trim() === email) return true;
+      return false;
+    });
+  }, [events, currentUser]);
 
   const allTickets = StorageService.getTickets();
-  const hostTickets = allTickets.filter((t) => {
-    if (currentUser?.uid && t.hostId === currentUser.uid) return true;
-    if (hostEvents.some((e) => e.eventId === t.eventId)) return true;
-    if (currentUser?.role === 'host' && (!t.hostId || t.hostId === 'demo_host_uid' || !allTickets.some(tk => tk.hostId === currentUser?.uid))) {
-      return true;
-    }
-    return false;
-  });
+  const hostTickets = useMemo(() => {
+    if (!currentUser?.uid) return [];
+    const uid = currentUser.uid;
+    const hostEventIds = new Set(hostEvents.map((e) => e.eventId));
+    return allTickets.filter((t) => {
+      if (t.hostId === uid) return true;
+      if (hostEventIds.has(t.eventId)) return true;
+      return false;
+    });
+  }, [allTickets, hostEvents, currentUser]);
 
   // Compute Statistics
   const totalEvents = hostEvents.length;
@@ -129,15 +134,23 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
 
   const confirmCancelEvent = () => {
     if (!eventToCancel) return;
-    StorageService.updateEvent(eventToCancel.eventId, { status: 'cancelled' });
-    onEventsUpdated();
-    setEventToCancel(null);
+    try {
+      StorageService.updateEvent(eventToCancel.eventId, { status: 'cancelled' }, currentUser?.uid, currentUser?.email);
+      onEventsUpdated();
+      setEventToCancel(null);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to cancel event.');
+    }
   };
 
   const handleDeleteEvent = (eventId: string) => {
     if (confirm('Are you sure you want to delete this event? This action cannot be undone.')) {
-      StorageService.deleteEvent(eventId);
-      onEventsUpdated();
+      try {
+        StorageService.deleteEvent(eventId, currentUser?.uid, currentUser?.email);
+        onEventsUpdated();
+      } catch (err: any) {
+        alert(err?.message || 'Failed to delete event.');
+      }
     }
   };
 

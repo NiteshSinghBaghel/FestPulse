@@ -54,6 +54,7 @@ export interface CollegeEvent {
   rules?: string[];
   amenities?: string[];
   hostPhone?: string;
+  hostEmail?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -99,6 +99,7 @@ export const CreateEventModal: React.FC<CreateEventModalProps> = ({ isOpen, onCl
       status: publishStatus,
       category,
       hostPhone: hostPhone.trim() || currentUser?.phone || '',
+      hostEmail: currentUser?.email?.toLowerCase().trim() || '',
       rules: rules.split('\n').filter(r => r.trim().length > 0),
       amenities: amenities.split(',').map(a => a.trim()).filter(a => a.length > 0)
     });

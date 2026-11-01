@@ -13,7 +13,8 @@ import {
   Clock, 
   ShieldCheck,
   Sparkles,
-  ArrowRight
+  ArrowRight,
+  ShieldAlert
 } from 'lucide-react';
 
 interface ManualVerifyModalProps {
@@ -21,6 +22,7 @@ interface ManualVerifyModalProps {
   onClose: () => void;
   onVerifiedSuccess: (ticket: Ticket) => void;
   hostId?: string;
+  hostEmail?: string;
 }
 
 export const ManualVerifyModal: React.FC<ManualVerifyModalProps> = ({
@@ -28,6 +30,7 @@ export const ManualVerifyModal: React.FC<ManualVerifyModalProps> = ({
   onClose,
   onVerifiedSuccess,
   hostId = '',
+  hostEmail = '',
 }) => {
   const [tokenInput, setTokenInput] = useState('');
   const [result, setResult] = useState<ScannerScanResult | null>(null);
@@ -47,7 +50,7 @@ export const ManualVerifyModal: React.FC<ManualVerifyModalProps> = ({
     setResult(null);
 
     setTimeout(() => {
-      const scanResult = StorageService.verifyAndProcessScan(token, hostId, 'entry');
+      const scanResult = StorageService.verifyAndProcessScan(token, hostId, hostEmail);
       setResult(scanResult);
       setIsVerifying(false);
 
@@ -153,6 +156,8 @@ export const ManualVerifyModal: React.FC<ManualVerifyModalProps> = ({
                 ? 'bg-emerald-50 border-emerald-200' 
                 : result.code === 'ALREADY_ENTERED'
                 ? 'bg-amber-50 border-amber-200'
+                : result.code === 'WRONG_HOST_OR_EVENT'
+                ? 'bg-amber-50 border-amber-300'
                 : 'bg-rose-50 border-rose-200'
             }`}>
               <div className="flex items-start gap-3">
@@ -161,10 +166,14 @@ export const ManualVerifyModal: React.FC<ManualVerifyModalProps> = ({
                     ? 'bg-emerald-100 text-emerald-700' 
                     : result.code === 'ALREADY_ENTERED'
                     ? 'bg-amber-100 text-amber-700'
+                    : result.code === 'WRONG_HOST_OR_EVENT'
+                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
                     : 'bg-rose-100 text-rose-700'
                 }`}>
                   {result.success ? (
                     <CheckCircle2 className="w-6 h-6 text-emerald-600" />
+                  ) : result.code === 'WRONG_HOST_OR_EVENT' ? (
+                    <ShieldAlert className="w-6 h-6 text-amber-600" />
                   ) : (
                     <AlertCircle className="w-6 h-6 text-rose-600" />
                   )}
@@ -177,12 +186,16 @@ export const ManualVerifyModal: React.FC<ManualVerifyModalProps> = ({
                         ? 'bg-emerald-200/60 text-emerald-900' 
                         : result.code === 'ALREADY_ENTERED'
                         ? 'bg-amber-200/60 text-amber-900'
+                        : result.code === 'WRONG_HOST_OR_EVENT'
+                        ? 'bg-amber-200/80 text-amber-950 font-black'
                         : 'bg-rose-200/60 text-rose-900'
                     }`}>
                       {result.success 
                         ? '✓ ENTRY GRANTED' 
                         : result.code === 'ALREADY_ENTERED'
                         ? '⚠️ ALREADY CHECKED IN'
+                        : result.code === 'WRONG_HOST_OR_EVENT'
+                        ? '🚫 UNAUTHORIZED SCANNER'
                         : '✕ INVALID TICKET'}
                     </span>
 
