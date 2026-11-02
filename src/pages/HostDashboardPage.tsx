@@ -83,51 +83,53 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     };
   }, []);
 
-  // Filter events for this host: ONLY match this host's uid or email! Never leak other organizers' events!
+  const organizerId = currentUser?.uid || '';
+
+  // Filter events strictly by the current user's organizer ID
   const hostEvents = useMemo(() => {
-    if (!currentUser?.uid) return [];
-    const uid = currentUser.uid;
-    const email = currentUser.email?.toLowerCase().trim();
-    return events.filter((e) => {
-      if (e.hostId === uid) return true;
-      if (email && e.hostEmail && e.hostEmail.toLowerCase().trim() === email) return true;
-      return false;
-    });
-  }, [events, currentUser]);
+    if (!organizerId) return [];
+    return StorageService.getHostEvents(organizerId);
+  }, [events, organizerId]);
 
   const allTickets = StorageService.getTickets();
+
+  // Filter tickets strictly by the current user's organizer ID
   const hostTickets = useMemo(() => {
-    if (!currentUser?.uid) return [];
-    const uid = currentUser.uid;
-    const hostEventIds = new Set(hostEvents.map((e) => e.eventId));
-    return allTickets.filter((t) => {
-      if (t.hostId === uid) return true;
-      if (hostEventIds.has(t.eventId)) return true;
-      return false;
-    });
-  }, [allTickets, hostEvents, currentUser]);
+    if (!organizerId) return [];
+    return StorageService.getHostTickets(organizerId);
+  }, [allTickets, organizerId, hostEvents]);
 
-  // Compute Statistics
-  const totalEvents = hostEvents.length;
-  const totalTicketsSold = hostEvents.reduce((acc, e) => acc + (e.ticketsSold || 0), 0);
-  
-  // Real gross revenue from verified tickets or ticketsSold
-  const ticketsRevenue = hostTickets.filter(t => t.status === 'confirmed').reduce((acc, t) => acc + (t.amount || 0), 0);
-  const eventsRevenue = hostEvents.reduce((acc, e) => acc + ((e.ticketsSold || 0) * (e.price || 0)), 0);
-  const totalRevenue = Math.max(ticketsRevenue, eventsRevenue);
+  // Compute Statistics & Financial Revenue strictly by organizer ID
+  const hostRevenueData = useMemo(() => {
+    if (!organizerId) {
+      return {
+        totalEvents: 0,
+        totalTicketsSold: 0,
+        ticketsRevenue: 0,
+        eventsRevenue: 0,
+        totalRevenue: 0,
+        totalCheckedIn: 0,
+        totalTransferred: 0,
+        availableBalance: 0,
+      };
+    }
+    return StorageService.getHostRevenue(organizerId);
+  }, [organizerId, hostEvents, hostTickets, payoutsVersion]);
 
-  const totalCheckedIn = hostTickets.filter(t => t.entryStatus === 'entered').length;
+  const {
+    totalEvents,
+    totalTicketsSold,
+    totalRevenue,
+    totalCheckedIn,
+    totalTransferred,
+    availableBalance,
+  } = hostRevenueData;
 
-  // Payouts & Revenue Transfers (Reactive to payoutsVersion & events)
+  // Payouts & Revenue Transfers strictly for this organizer ID
   const hostPayouts = useMemo(() => {
-    return StorageService.getPayouts(currentUser?.uid);
-  }, [currentUser?.uid, payoutsVersion, events]);
-
-  const totalTransferred = useMemo(() => {
-    return hostPayouts.reduce((acc, p) => acc + p.amount, 0);
-  }, [hostPayouts]);
-
-  const availableBalance = Math.max(0, totalRevenue - totalTransferred);
+    if (!organizerId) return [];
+    return StorageService.getPayouts(organizerId);
+  }, [organizerId, payoutsVersion, events]);
 
   // Cancellation Confirmation Modal State
   const [eventToCancel, setEventToCancel] = useState<CollegeEvent | null>(null);
@@ -930,26 +932,32 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
             <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-2">
               Revenue Breakdown By Event
             </h4>
-            <div className="space-y-2">
-              {hostEvents.map((evt) => {
-                const rev = evt.ticketsSold * evt.price;
-                return (
-                  <div
-                    key={evt.eventId}
-                    className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs"
-                  >
-                    <div>
-                      <p className="font-bold text-slate-800">{evt.title}</p>
-                      <p className="text-[11px] text-slate-500">{evt.ticketsSold} tickets × ₹{evt.price}</p>
+            {hostEvents.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-500 text-xs">
+                No events published yet. Once you publish events and tickets are purchased, your event revenue breakdown will appear here.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {hostEvents.map((evt) => {
+                  const rev = evt.ticketsSold * evt.price;
+                  return (
+                    <div
+                      key={evt.eventId}
+                      className="p-3 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs"
+                    >
+                      <div>
+                        <p className="font-bold text-slate-800">{evt.title}</p>
+                        <p className="text-[11px] text-slate-500">{evt.ticketsSold} tickets × ₹{evt.price}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-mono font-bold text-amber-700 text-sm">₹{rev.toLocaleString()}</p>
+                        <span className="text-[10px] text-emerald-600 font-semibold">100% Verified</span>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="font-mono font-bold text-amber-700 text-sm">₹{rev.toLocaleString()}</p>
-                      <span className="text-[10px] text-emerald-600 font-semibold">100% Verified</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}

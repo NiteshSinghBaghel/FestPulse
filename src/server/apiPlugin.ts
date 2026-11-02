@@ -316,8 +316,13 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
         }
 
         // 3. Events endpoints
-        if (url === '/api/events') {
+        if (url === '/api/events' || url.startsWith('/api/events?')) {
           if (req.method === 'GET') {
+            const parsed = new URL(url, 'http://localhost');
+            const hostId = parsed.searchParams.get('hostId');
+            if (hostId) {
+              return sendJson(res, 200, db.events.filter((e) => e.hostId === hostId));
+            }
             return sendJson(res, 200, db.events);
           }
           if (req.method === 'POST') {
@@ -464,8 +469,15 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
         }
 
         // 4b. Tickets endpoints
-        if (url === '/api/tickets') {
+        if (url === '/api/tickets' || url.startsWith('/api/tickets?')) {
           if (req.method === 'GET') {
+            const parsed = new URL(url, 'http://localhost');
+            const hostId = parsed.searchParams.get('hostId');
+            if (hostId) {
+              const hostEvents = db.events.filter((e) => e.hostId === hostId);
+              const hostEventIds = new Set(hostEvents.map((e) => e.eventId));
+              return sendJson(res, 200, db.tickets.filter((t) => t.hostId === hostId || hostEventIds.has(t.eventId)));
+            }
             return sendJson(res, 200, db.tickets);
           }
           if (req.method === 'POST') {
@@ -827,8 +839,13 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
         }
 
         // 6. Payouts endpoints
-        if (url === '/api/payouts') {
+        if (url === '/api/payouts' || url.startsWith('/api/payouts?')) {
           if (req.method === 'GET') {
+            const parsed = new URL(url, 'http://localhost');
+            const hostId = parsed.searchParams.get('hostId');
+            if (hostId) {
+              return sendJson(res, 200, db.payouts.filter((p) => p.hostId === hostId));
+            }
             return sendJson(res, 200, db.payouts);
           }
           if (req.method === 'POST') {

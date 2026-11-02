@@ -1,6 +1,24 @@
 {
   "events": [
     {
+      "eventId": "evt_test_B_1793622679023",
+      "hostId": "org_strict_B_1793622678947",
+      "title": "Org B Cultural Fest",
+      "price": 300,
+      "capacity": 200,
+      "ticketsSold": 1,
+      "status": "published"
+    },
+    {
+      "eventId": "evt_test_A_1793622678947",
+      "hostId": "org_strict_A_1793622678947",
+      "title": "Org A Tech Hackathon",
+      "price": 500,
+      "capacity": 100,
+      "ticketsSold": 2,
+      "status": "published"
+    },
+    {
       "eventId": "evt_beta_1793543121760",
       "title": "Cricket Championship 2026",
       "hostId": "host_beta_1793543121689",
@@ -62,6 +80,15 @@
     }
   ],
   "tickets": [
+    {
+      "ticketId": "TKT_ORGA_1793622679026",
+      "eventId": "evt_test_A_1793622678947",
+      "hostId": "org_strict_A_1793622678947",
+      "userId": "user_1",
+      "amount": 1000,
+      "status": "confirmed",
+      "entryStatus": "entered"
+    },
     {
       "ticketId": "TKT_ALPHA_1793543121762",
       "eventId": "evt_alpha_1793543121758",
@@ -346,6 +373,12 @@
     }
   ],
   "payouts": [
+    {
+      "payoutId": "POUT_ORGA_1793622679029",
+      "hostId": "org_strict_A_1793622678947",
+      "amount": 800,
+      "status": "completed"
+    },
     {
       "payoutId": "pout_rzp_mv8d319z_H056",
       "hostId": "demo_host_uid",

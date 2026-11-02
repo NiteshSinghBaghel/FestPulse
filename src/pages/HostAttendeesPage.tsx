@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { CollegeEvent, Ticket } from '../types';
 import { StorageService } from '../services/storageService';
 import { useAuth } from '../context/AuthContext';
@@ -64,24 +64,23 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
     };
   }, []);
 
-  // Filter events belonging ONLY to this host - strictly isolated
-  const hostEvents = allEvents.filter((e) => {
-    if (currentUser?.uid && e.hostId === currentUser.uid) return true;
-    if (currentUser?.email && e.hostEmail && e.hostEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim()) return true;
-    return false;
-  });
+  const organizerId = currentUser?.uid || '';
+
+  // Filter events strictly by the current user's organizer ID
+  const hostEvents: CollegeEvent[] = useMemo(() => {
+    if (!organizerId) return [];
+    return StorageService.getHostEvents(organizerId);
+  }, [allEvents, organizerId]);
 
   // Host tickets strictly belonging to this host's events
-  const hostEventIds = new Set(hostEvents.map((e) => e.eventId));
-  const hostTickets = allTickets.filter((t) => {
-    if (currentUser?.uid && t.hostId === currentUser.uid) return true;
-    if (hostEventIds.has(t.eventId)) return true;
-    return false;
-  });
+  const hostTickets: Ticket[] = useMemo(() => {
+    if (!organizerId) return [];
+    return StorageService.getHostTickets(organizerId);
+  }, [allTickets, organizerId]);
 
   // Active event object if a specific event is selected
   const activeEvent = selectedEventId !== 'ALL'
-    ? hostEvents.find((e) => e.eventId === selectedEventId)
+    ? hostEvents.find((e: CollegeEvent) => e.eventId === selectedEventId)
     : null;
 
   // Helpline edit state

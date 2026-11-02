@@ -241,6 +241,15 @@ export class StorageService {
     return this.getEvents().find(e => e.eventId === eventId);
   }
 
+  /**
+   * Strictly filters and returns events owned by the specified organizer ID.
+   */
+  static getHostEvents(organizerId: string): CollegeEvent[] {
+    if (!organizerId) return [];
+    const cleanId = organizerId.trim();
+    return this.getEvents().filter(e => e.hostId === cleanId);
+  }
+
   static createEvent(eventData: Omit<CollegeEvent, 'eventId' | 'createdAt' | 'updatedAt' | 'ticketsSold' | 'availableTickets'>): CollegeEvent {
     const events = this.getEvents();
     const newEvent: CollegeEvent = {
@@ -478,6 +487,77 @@ export class StorageService {
       if (hostEventIds.has(t.eventId)) return true;
       return false;
     });
+  }
+
+  /**
+   * Strictly filters and returns tickets belonging to events owned by the specified organizer ID.
+   */
+  static getHostTickets(organizerId: string): Ticket[] {
+    if (!organizerId) return [];
+    const cleanId = organizerId.trim();
+    const hostEvents = this.getHostEvents(cleanId);
+    const hostEventIds = new Set(hostEvents.map(e => e.eventId));
+    return this.getTickets().filter(t => t.hostId === cleanId || hostEventIds.has(t.eventId));
+  }
+
+  /**
+   * Calculates financial metrics and gross revenue strictly for the specified organizer ID.
+   */
+  static getHostRevenue(organizerId: string): {
+    totalEvents: number;
+    totalTicketsSold: number;
+    ticketsRevenue: number;
+    eventsRevenue: number;
+    totalRevenue: number;
+    totalCheckedIn: number;
+    totalTransferred: number;
+    availableBalance: number;
+  } {
+    if (!organizerId) {
+      return {
+        totalEvents: 0,
+        totalTicketsSold: 0,
+        ticketsRevenue: 0,
+        eventsRevenue: 0,
+        totalRevenue: 0,
+        totalCheckedIn: 0,
+        totalTransferred: 0,
+        availableBalance: 0,
+      };
+    }
+    const cleanId = organizerId.trim();
+    const hostEvents = this.getHostEvents(cleanId);
+    const hostTickets = this.getHostTickets(cleanId);
+    const hostPayouts = this.getPayouts(cleanId);
+
+    const totalEvents = hostEvents.length;
+    const totalTicketsSold = hostEvents.reduce((acc, e) => acc + (e.ticketsSold || 0), 0);
+
+    const ticketsRevenue = hostTickets
+      .filter(t => t.status === 'confirmed')
+      .reduce((acc, t) => acc + (t.amount || 0), 0);
+
+    const eventsRevenue = hostEvents.reduce(
+      (acc, e) => acc + ((e.ticketsSold || 0) * (e.price || 0)),
+      0
+    );
+
+    const totalRevenue = Math.max(ticketsRevenue, eventsRevenue);
+    const totalCheckedIn = hostTickets.filter(t => t.entryStatus === 'entered').length;
+
+    const totalTransferred = hostPayouts.reduce((acc, p) => acc + p.amount, 0);
+    const availableBalance = Math.max(0, totalRevenue - totalTransferred);
+
+    return {
+      totalEvents,
+      totalTicketsSold,
+      ticketsRevenue,
+      eventsRevenue,
+      totalRevenue,
+      totalCheckedIn,
+      totalTransferred,
+      availableBalance,
+    };
   }
 
   static getTicketById(ticketId: string): Ticket | undefined {
@@ -1151,8 +1231,9 @@ export class StorageService {
         localStorage.setItem(STORAGE_KEYS.PAYOUTS, JSON.stringify(cleaned));
       }
       if (hostId) {
-        // Return payouts for this host, including any demo host or unassigned payouts so history is never lost
-        return cleaned.filter(p => !p.hostId || p.hostId === hostId || p.hostId === 'demo_host_uid' || hostId === 'demo_host_uid');
+        // Strictly return payouts belonging to this organizer ID only
+        const cleanHostId = hostId.trim();
+        return cleaned.filter(p => p.hostId === cleanHostId);
       }
       return cleaned;
     } catch {
