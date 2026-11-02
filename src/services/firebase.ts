@@ -1,5 +1,14 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, Firestore, doc, getDoc, setDoc } from 'firebase/firestore';
+import { 
+  getFirestore, 
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  Firestore, 
+  doc, 
+  getDoc, 
+  setDoc 
+} from 'firebase/firestore';
 import { 
   getAuth, 
   Auth, 
@@ -44,7 +53,20 @@ try {
     ? firebaseConfigJson.firestoreDatabaseId
     : undefined;
 
-  db = dbId ? getFirestore(app, dbId) : getFirestore(app);
+  // Initialize Firestore with multi-tab persistent IndexedDB local cache for sub-millisecond local reads
+  try {
+    const cacheConfig = {
+      localCache: persistentLocalCache({
+        tabManager: persistentMultipleTabManager()
+      })
+    };
+    db = dbId ? initializeFirestore(app, cacheConfig, dbId) : initializeFirestore(app, cacheConfig);
+    console.log('Firestore initialized with IndexedDB persistent local cache (multi-tab enabled).');
+  } catch (cacheErr) {
+    console.warn('Persistent cache fallback, using getFirestore:', cacheErr);
+    db = dbId ? getFirestore(app, dbId) : getFirestore(app);
+  }
+
   auth = getAuth(app);
   isFirebaseInitialized = true;
 

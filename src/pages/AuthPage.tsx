@@ -169,8 +169,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({
 
     try {
       const demoEmail = demoRole === 'host' ? 'host@campusfest.org' : 'student@college.edu';
-      // Query database fresh to preserve any user-saved updates (name, phone, college)
-      const existing = await StorageService.findAccountByIdentifierAsync(demoEmail, true);
+      // Fast instantaneous local lookup (0ms)
+      const existing = StorageService.findAccountByIdentifier(demoEmail);
       
       const demoName = existing?.name || (demoRole === 'host' ? 'Cultural Committee Head' : 'Aarav Sharma');
       const demoCollege = existing?.college || (demoRole === 'host' ? 'IIT Delhi Event Council' : 'IIT Delhi (CS Dept)');

@@ -45,46 +45,90 @@ interface AuthContextType {
 
 const AUTH_STORAGE_KEY = 'festplus_auth_user_v1';
 
+// In-Memory Session & Token Memoization Cache to eliminate parsing lag and state recovery delay
+let memoizedSession: UserProfile | null = null;
+let memoizedJwtToken: string | null = null;
+let memoizedIsVerified = false;
+
+// Fast synchronous memoized session getter (0ms)
+function getMemoizedSession(): UserProfile | null {
+  if (memoizedSession) return memoizedSession;
+  try {
+    const saved = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (saved) {
+      const parsed: UserProfile = JSON.parse(saved);
+      if (parsed?.email?.includes('@campus.edu')) {
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+        return null;
+      }
+      memoizedSession = parsed;
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+// Fast synchronous memoized token getter (0ms)
+function getMemoizedJwtToken(): string | null {
+  if (memoizedJwtToken) return memoizedJwtToken;
+  const token = localStorage.getItem('festplus_jwt_token') || localStorage.getItem('campuspass_jwt_token');
+  memoizedJwtToken = token;
+  return token;
+}
+
+// Fast synchronous JWT expiration check (0ms) to unblock authentication state recovery on frame 1
+function checkTokenValidSynchronously(token: string | null): boolean {
+  if (!token) return false;
+  try {
+    const parts = token.split('.');
+    if (parts.length === 3) {
+      const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+      const now = Math.floor(Date.now() / 1000);
+      return Boolean(payload.exp && payload.exp > now);
+    }
+  } catch {}
+  return false;
+}
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
-    try {
-      localStorage.removeItem('campuspass_auth_user_v1');
-      localStorage.removeItem('campuspass_auth_user_v2');
-      localStorage.removeItem('campuspass_demo_user');
-      
-      const saved = localStorage.getItem(AUTH_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.email?.includes('@campus.edu')) {
-          localStorage.removeItem(AUTH_STORAGE_KEY);
-          return null;
-        }
-        return parsed;
-      }
-    } catch {
-      return null;
-    }
-    return null;
+    return getMemoizedSession();
   });
 
   const [jwtToken, setJwtToken] = useState<string | null>(() => {
-    return localStorage.getItem('festplus_jwt_token') || localStorage.getItem('campuspass_jwt_token');
+    return getMemoizedJwtToken();
   });
 
-  const [isTokenVerified, setIsTokenVerified] = useState<boolean>(false);
+  // Synchronously recover token verification status without waiting for async crypto round-trips
+  const [isTokenVerified, setIsTokenVerified] = useState<boolean>(() => {
+    if (memoizedIsVerified) return true;
+    const token = getMemoizedJwtToken();
+    const isValid = checkTokenValidSynchronously(token);
+    if (isValid) {
+      memoizedIsVerified = true;
+      return true;
+    }
+    return false;
+  });
+
   const [isLoadingAuth, setIsLoadingAuth] = useState<boolean>(false);
 
-  // Validate stored JWT token on startup
+  // Validate stored JWT token signature in background without delaying initial render
   useEffect(() => {
     const verifyInitialSession = async () => {
       const stored = await JwtService.getVerifiedStoredToken();
       if (stored) {
+        memoizedJwtToken = stored.token;
+        memoizedIsVerified = true;
         setJwtToken(stored.token);
         setIsTokenVerified(true);
         if (currentUser && !currentUser.token) {
           const updated = { ...currentUser, token: stored.token };
+          memoizedSession = updated;
           setCurrentUser(updated);
           localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updated));
         }
@@ -96,9 +140,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           role: currentUser.role,
         });
         JwtService.saveToken(freshToken);
+        memoizedJwtToken = freshToken;
+        memoizedIsVerified = true;
         setJwtToken(freshToken);
         setIsTokenVerified(true);
         const updated = { ...currentUser, token: freshToken };
+        memoizedSession = updated;
         setCurrentUser(updated);
         localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updated));
       }
@@ -109,8 +156,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     if (currentUser) {
+      memoizedSession = currentUser;
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(currentUser));
     } else {
+      memoizedSession = null;
+      memoizedJwtToken = null;
+      memoizedIsVerified = false;
       localStorage.removeItem(AUTH_STORAGE_KEY);
       JwtService.clearToken();
       setJwtToken(null);
@@ -214,6 +265,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 3. Save profile to Firestore and sync
       FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
 
+      memoizedSession = userProfile;
+      memoizedJwtToken = token;
+      memoizedIsVerified = true;
       setCurrentUser(userProfile);
       return { success: true };
     } catch (err: any) {
@@ -243,8 +297,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      // Find account both in local cache AND persistent server database (query fresh)
-      let account = await StorageService.findAccountByIdentifierAsync(rawIdentifier, true);
+      // 1. FAST PATH: Check local cache first (0ms instantaneous lookup)
+      let account = StorageService.findAccountByIdentifier(rawIdentifier);
+
+      // Check if local account matched password directly
+      let passwordMatched = account ? (!account.password || account.password === password) : false;
+
+      // 2. If not found locally or password didn't match, query fresh from server API / cloud
+      if (!account || !passwordMatched) {
+        account = await StorageService.findAccountByIdentifierAsync(rawIdentifier, true);
+        if (account) {
+          passwordMatched = !account.password || account.password === password;
+        }
+      }
 
       if (!account) {
         return {
@@ -255,16 +320,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
       }
 
-      // Check password
-      let passwordMatched = !account.password || account.password === password;
-
-      // If local/server password didn't match, also test Firebase Auth if initialized
+      // If local/server password didn't match, also test Firebase Auth if initialized with timeout
       if (!passwordMatched && isFirebaseInitialized && account.email) {
         try {
-          await firebaseLoginWithEmail(account.email, password);
-          // If Firebase Auth accepted it, sync the new password across all database layers!
+          const fbPromise = firebaseLoginWithEmail(account.email, password);
+          const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500));
+          await Promise.race([fbPromise, timeoutPromise]);
+          // If Firebase Auth accepted it, sync the new password across all database layers in background
           passwordMatched = true;
-          await StorageService.updateAccountPasswordAsync(account.email, password, selectedRole, account.name);
+          StorageService.updateAccountPasswordAsync(account.email, password, selectedRole, account.name).catch(() => {});
           account.password = password;
         } catch (fbErr: any) {
           console.warn('[Firebase direct login check]:', fbErr?.code);
@@ -309,6 +373,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       StorageService.saveAccount(account);
       FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
 
+      memoizedSession = userProfile;
+      memoizedJwtToken = token;
+      memoizedIsVerified = true;
       setCurrentUser(userProfile);
       return { success: true };
     } catch (err: any) {
@@ -382,6 +449,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
+      memoizedSession = userProfile;
+      memoizedJwtToken = token;
+      memoizedIsVerified = true;
       setCurrentUser(userProfile);
       return { success: true, isNewUser };
     } catch (err: any) {
@@ -400,6 +470,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Sign out
   const logout = () => {
+    memoizedSession = null;
+    memoizedJwtToken = null;
+    memoizedIsVerified = false;
     JwtService.clearToken();
     setJwtToken(null);
     setIsTokenVerified(false);
@@ -450,6 +523,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsTokenVerified(true);
       updatedUser.token = token;
 
+      memoizedSession = updatedUser;
+      memoizedJwtToken = token;
+      memoizedIsVerified = true;
       setCurrentUser(updatedUser);
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updatedUser));
 

@@ -172,8 +172,18 @@ export class FirebaseDbService {
   }
 
   // ================= ACCOUNTS / USERS =================
+  private static cachedAccounts: RegisteredAccount[] | null = null;
+  private static cachedAccountsTimestamp = 0;
+  private static readonly ACCOUNTS_CACHE_TTL_MS = 60000; // 60s in-memory cache
+
   static async getAccounts(): Promise<RegisteredAccount[]> {
     if (!isFirebaseInitialized || !db) return [];
+    
+    // Serve from in-memory cache if fresh
+    if (this.cachedAccounts && (Date.now() - this.cachedAccountsTimestamp < this.ACCOUNTS_CACHE_TTL_MS)) {
+      return this.cachedAccounts;
+    }
+
     try {
       const colRef = collection(db, COLLECTIONS.ACCOUNTS);
       const snapshot = await getDocs(colRef);
@@ -181,17 +191,30 @@ export class FirebaseDbService {
       snapshot.forEach((docSnap) => {
         accounts.push(docSnap.data() as RegisteredAccount);
       });
+
+      this.cachedAccounts = accounts;
+      this.cachedAccountsTimestamp = Date.now();
       return accounts;
     } catch (error) {
       console.warn('Firestore getAccounts error:', error);
-      return [];
+      return this.cachedAccounts || [];
     }
   }
 
   static async saveAccount(account: RegisteredAccount): Promise<boolean> {
     if (!isFirebaseInitialized || !db) return false;
     try {
-      // Use email as doc ID sanitized or uid
+      // Invalidate/update in-memory cache
+      if (this.cachedAccounts) {
+        const idx = this.cachedAccounts.findIndex(a => a.uid === account.uid);
+        if (idx >= 0) {
+          this.cachedAccounts[idx] = account;
+        } else {
+          this.cachedAccounts.unshift(account);
+        }
+      }
+
+      // Use uid as doc ID
       const docRef = doc(db, COLLECTIONS.ACCOUNTS, account.uid);
       await setDoc(docRef, account, { merge: true });
       return true;

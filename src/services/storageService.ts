@@ -52,14 +52,21 @@ export class StorageService {
     this.isSyncing = true;
 
     try {
-      // 1. Fetch from Firestore (AUTHORITATIVE MASTER DATABASE)
+      // 1. Fetch from Firestore (AUTHORITATIVE MASTER DATABASE) with fast timeout
       try {
-        const [fbEvents, fbTickets, fbPayments, fbAccounts, fbPayouts] = await Promise.all([
+        const firestorePromise = Promise.all([
           FirebaseDbService.getEvents(),
           FirebaseDbService.getTickets(),
           FirebaseDbService.getPayments(),
           FirebaseDbService.getAccounts(),
           FirebaseDbService.getPayouts(),
+        ]);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Firestore sync timeout')), 2500)
+        );
+        const [fbEvents, fbTickets, fbPayments, fbAccounts, fbPayouts] = await Promise.race([
+          firestorePromise,
+          timeoutPromise
         ]);
 
         // Merge events non-destructively: preserve local events and add cloud events
@@ -846,49 +853,18 @@ export class StorageService {
       return (clean && aEmail === clean) || (cleanDigits.length >= 10 && aPhone === cleanDigits);
     };
 
-    // If fresh check requested (e.g. on login or post-edit), check persistent server & cloud first!
-    if (forceFresh) {
-      try {
-        const res = await fetch('/api/accounts');
-        if (res.ok) {
-          const accounts: RegisteredAccount[] = await res.json();
-          if (Array.isArray(accounts)) {
-            const found = accounts.find(matcher);
-            if (found) {
-              this.saveAccount(found);
-              return found;
-            }
-          }
-        }
-      } catch {}
-
-      try {
-        const fbAccounts = await FirebaseDbService.getAccounts();
-        const found = fbAccounts.find(matcher);
-        if (found) {
-          this.saveAccount(found);
-          return found;
-        }
-      } catch {}
+    // 1. FAST LOCAL LOOKUP: Instant 0ms response
+    const local = this.findAccountByIdentifier(identifier);
+    if (local && !forceFresh) {
+      return local;
     }
 
-    // 1. Check local storage
-    const local = this.findAccountByIdentifier(identifier);
-    if (local && !forceFresh) return local;
-
-    // 2. Check Firestore cloud database directly
+    // 2. ULTRA-FAST SERVER API CHECK (/api/accounts is in-memory and returns in <5ms)
     try {
-      const fbAccounts = await FirebaseDbService.getAccounts();
-      const found = fbAccounts.find(matcher);
-      if (found) {
-        this.saveAccount(found);
-        return found;
-      }
-    } catch {}
-
-    // 3. Check server database directly
-    try {
-      const res = await fetch('/api/accounts');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1200);
+      const res = await fetch('/api/accounts', { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (res.ok) {
         const accounts: RegisteredAccount[] = await res.json();
         if (Array.isArray(accounts)) {
@@ -899,14 +875,12 @@ export class StorageService {
           }
         }
       }
-    } catch {
-      // safe fallback
-    }
+    } catch {}
 
-    // Fallback to local if server was temporarily unavailable
+    // 3. If local exists, return it immediately without waiting for slow cloud
     if (local) return local;
 
-    // 4. Default demo accounts
+    // 4. Default demo accounts (0ms instantaneous return)
     if (clean === 'host@campusfest.org' || (cleanDigits && cleanDigits === '9876543210' && clean.includes('host'))) {
       return {
         uid: 'demo_host_uid',
@@ -931,6 +905,22 @@ export class StorageService {
         createdAt: new Date().toISOString(),
       };
     }
+
+    // 5. Cloud Firestore fallback with strict 1.5s timeout (only for new cross-device accounts)
+    try {
+      const fbPromise = FirebaseDbService.getAccounts();
+      const timeoutPromise = new Promise<RegisteredAccount[]>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 1500)
+      );
+      const fbAccounts = await Promise.race([fbPromise, timeoutPromise]);
+      if (Array.isArray(fbAccounts)) {
+        const found = fbAccounts.find(matcher);
+        if (found) {
+          this.saveAccount(found);
+          return found;
+        }
+      }
+    } catch {}
 
     return undefined;
   }
