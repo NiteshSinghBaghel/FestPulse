@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { CollegeEvent, Ticket } from '../types';
 import { PaymentModal } from '../components/PaymentModal';
+import { VolunteerGateShareModal } from '../components/VolunteerGateShareModal';
+import { useAuth } from '../context/AuthContext';
 import { 
   ArrowLeft, 
   Calendar, 
@@ -13,7 +15,8 @@ import {
   ExternalLink,
   ShieldCheck,
   Building2,
-  Users
+  Users,
+  KeyRound
 } from 'lucide-react';
 
 interface EventDetailPageProps {
@@ -23,6 +26,10 @@ interface EventDetailPageProps {
 }
 
 export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack, onTicketPurchased }) => {
+  const { currentUser } = useAuth();
+  const [isVolunteerModalOpen, setIsVolunteerModalOpen] = useState(false);
+  const isHost = (currentUser?.uid && currentUser.uid === event.hostId) || 
+                 (currentUser?.email && currentUser.email === event.hostEmail);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -116,6 +123,36 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
             </p>
           </div>
         </div>
+
+        {/* If the viewer is the host of this event: Volunteer Gate Access Banner */}
+        {isHost && event.gatePin && (
+          <div className="mb-6 p-4 rounded-3xl bg-amber-50 border-2 border-amber-300 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shrink-0">
+                <KeyRound className="w-5 h-5 stroke-[2.4]" />
+              </div>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-900 block">
+                  Host Administration • Gate Volunteer Access
+                </span>
+                <p className="text-sm font-black text-slate-900">
+                  Gate Code: <span className="font-mono text-amber-950 tracking-widest">{event.gatePin}</span>
+                </p>
+                <p className="text-xs text-slate-600 font-medium">
+                  Click below to get the 6-digit code, direct scanner link, WhatsApp invite, or QR to send to your door volunteers.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsVolunteerModalOpen(true)}
+              className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-xs transition active:scale-95 shrink-0 cursor-pointer"
+            >
+              <Share2 className="w-4 h-4" />
+              <span>Send Code & Link to Volunteers</span>
+            </button>
+          </div>
+        )}
 
         {/* Two-Column Responsive Grid on Desktop */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -322,6 +359,15 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
           onTicketPurchased(newTicket);
         }}
       />
+
+      {/* Volunteer Gate Access Share Modal (For Organizer) */}
+      {isHost && (
+        <VolunteerGateShareModal
+          event={event}
+          isOpen={isVolunteerModalOpen}
+          onClose={() => setIsVolunteerModalOpen(false)}
+        />
+      )}
     </div>
   );
 };

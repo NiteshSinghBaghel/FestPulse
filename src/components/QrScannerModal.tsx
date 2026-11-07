@@ -69,12 +69,17 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
   const isScanningActiveRef = useRef<boolean>(true);
   const feedbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Refresh recent entries list
+  // Refresh recent entries list strictly for the current organizer's own events
   const loadRecentEntries = () => {
-    const all = StorageService.getTickets();
-    const entered = all.filter(t => t.entryStatus === 'entered');
-    // Sort latest entry first
-    entered.sort((a, b) => (b.entryTime || b.issuedAt || '').localeCompare(a.entryTime || a.issuedAt || ''));
+    const hostTickets = StorageService.getHostTickets(currentUser?.uid || '', currentUser?.email);
+    const entered = hostTickets.filter(t => t.entryStatus === 'entered');
+    // Sort latest entry first (strictly newest at the very top)
+    entered.sort((a, b) => {
+      const timeB = b.entryTimestamp ? new Date(b.entryTimestamp).getTime() : 0;
+      const timeA = a.entryTimestamp ? new Date(a.entryTimestamp).getTime() : 0;
+      if (timeB !== timeA) return timeB - timeA;
+      return (b.entryTime || b.issuedAt || '').localeCompare(a.entryTime || a.issuedAt || '');
+    });
     setRecentEntries(entered);
   };
 

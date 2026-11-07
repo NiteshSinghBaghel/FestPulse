@@ -396,10 +396,10 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           }
         }
 
-        // 4. Dedicated Ticket Gate Verification with Strict Host & Event Check
+        // 4. Dedicated Ticket Gate Verification with Strict Host & Event Check or Volunteer Gate PIN
         if (url === '/api/tickets/verify' && req.method === 'POST') {
           const body = await parseBody(req);
-          const { qrToken, ticketId, hostId, hostEmail } = body;
+          const { qrToken, ticketId, hostId, hostEmail, volunteerGatePin, eventId: targetEventId } = body;
           const token = (qrToken || ticketId || '').trim();
 
           if (!token) {
@@ -413,23 +413,39 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
 
           const event = db.events.find((e: any) => e.eventId === ticket.eventId);
 
-          // STRICT HOST VERIFICATION
-          const normalizedHostId = hostId?.trim();
-          const normalizedHostEmail = hostEmail?.toLowerCase().trim();
-          const isAuthorizedOrganizer = Boolean(
-            (normalizedHostId && ticket.hostId && ticket.hostId === normalizedHostId) ||
-            (normalizedHostId && event && event.hostId === normalizedHostId) ||
-            (normalizedHostEmail && event && event.hostEmail && event.hostEmail.toLowerCase().trim() === normalizedHostEmail)
-          );
+          if (volunteerGatePin && targetEventId) {
+            const targetEvent = db.events.find((e: any) => e.eventId === targetEventId && e.gatePin === volunteerGatePin.trim());
+            if (!targetEvent) {
+              return sendJson(res, 403, { success: false, error: 'Invalid volunteer gate PIN for this event', code: 'WRONG_HOST_OR_EVENT' });
+            }
+            if (ticket.eventId !== targetEventId) {
+              const eventName = ticket.eventTitle || event?.title || 'an event';
+              return sendJson(res, 403, {
+                success: false,
+                error: `WRONG EVENT PASS! This pass belongs to "${eventName}", not "${targetEvent.title}". Gate entry denied.`,
+                code: 'WRONG_HOST_OR_EVENT',
+                ticket
+              });
+            }
+          } else {
+            // STRICT HOST VERIFICATION
+            const normalizedHostId = hostId?.trim();
+            const normalizedHostEmail = hostEmail?.toLowerCase().trim();
+            const isAuthorizedOrganizer = Boolean(
+              (normalizedHostId && ticket.hostId && ticket.hostId === normalizedHostId) ||
+              (normalizedHostId && event && event.hostId === normalizedHostId) ||
+              (normalizedHostEmail && event && event.hostEmail && event.hostEmail.toLowerCase().trim() === normalizedHostEmail)
+            );
 
-          if (!isAuthorizedOrganizer) {
-            const eventName = ticket.eventTitle || event?.title || 'an event';
-            return sendJson(res, 403, {
-              success: false,
-              error: `UNAUTHORIZED SCANNER! This pass belongs to "${eventName}" created by a different organizer. Only the organizer of this event can scan and verify this pass.`,
-              code: 'WRONG_HOST_OR_EVENT',
-              ticket
-            });
+            if (!isAuthorizedOrganizer) {
+              const eventName = ticket.eventTitle || event?.title || 'an event';
+              return sendJson(res, 403, {
+                success: false,
+                error: `UNAUTHORIZED SCANNER! This pass belongs to "${eventName}" created by a different organizer. Only the organizer of this event can scan and verify this pass.`,
+                code: 'WRONG_HOST_OR_EVENT',
+                ticket
+              });
+            }
           }
 
           if (ticket.status === 'cancelled' || ticket.status === 'refunded') {
@@ -450,9 +466,12 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             });
           }
 
-          const nowIso = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          const now = new Date();
+          const nowDisplay = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
           ticket.entryStatus = 'entered';
-          ticket.entryTime = nowIso;
+          ticket.entryTime = nowDisplay;
+          ticket.entryTimestamp = now.toISOString();
+          ticket.verifiedBy = volunteerGatePin ? 'volunteer' : 'organizer';
           ticket.exitStatus = 'not_exited';
           saveDatabase(db);
 
@@ -511,8 +530,17 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             const currentTicket = db.tickets[idx];
             const event = db.events.find((e) => e.eventId === currentTicket.eventId);
 
-            // If updating check-in status, enforce host authorization
-            if (updates.requestingHostId || updates.requestingHostEmail) {
+            // If updating check-in status, enforce host authorization or volunteer gate PIN
+            if (updates.volunteerGatePin) {
+              const isVolunteerValid = Boolean(event && event.gatePin === updates.volunteerGatePin.trim());
+              if (!isVolunteerValid) {
+                return sendJson(res, 403, {
+                  error: 'Unauthorized: Invalid volunteer gate PIN for this event.',
+                  code: 'WRONG_HOST_OR_EVENT'
+                });
+              }
+              delete updates.volunteerGatePin;
+            } else if (updates.requestingHostId || updates.requestingHostEmail) {
               const isOwner = Boolean(
                 (updates.requestingHostId && currentTicket.hostId === updates.requestingHostId) ||
                 (updates.requestingHostId && event && event.hostId === updates.requestingHostId) ||

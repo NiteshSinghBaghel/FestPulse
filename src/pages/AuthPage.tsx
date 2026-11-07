@@ -42,13 +42,15 @@ interface AuthPageProps {
   initialRole?: UserRole;
   onBackToLanding?: () => void;
   onSwitchRole?: (role: UserRole) => void;
+  onOpenVolunteerScanner?: () => void;
 }
 
 export const AuthPage: React.FC<AuthPageProps> = ({ 
   onSuccess, 
   initialRole = 'user', 
   onBackToLanding,
-  onSwitchRole 
+  onSwitchRole,
+  onOpenVolunteerScanner
 }) => {
   const { 
     login, 
@@ -1182,8 +1184,20 @@ export const AuthPage: React.FC<AuthPageProps> = ({
                 </div>
               )}
 
+              {/* Gate Volunteer PIN Option */}
+              <div className="mt-4 pt-3 border-t border-slate-100 text-center">
+                <button
+                  type="button"
+                  onClick={() => onOpenVolunteerScanner && onOpenVolunteerScanner()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 transition cursor-pointer"
+                >
+                  <KeyRound className="w-3.5 h-3.5 text-amber-700" />
+                  <span>Entrance Volunteer? Enter 6-Digit Gate PIN &rarr;</span>
+                </button>
+              </div>
+
               {/* Bottom Feature Badges */}
-              <div className="mt-3.5 flex items-center justify-center gap-3 text-[11px] text-slate-400">
+              <div className="mt-3 flex items-center justify-center gap-3 text-[11px] text-slate-400">
                 <span className="flex items-center gap-1 font-medium text-slate-600">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" /> Free Persistent DB
                 </span>

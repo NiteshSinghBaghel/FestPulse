@@ -55,6 +55,7 @@ export interface CollegeEvent {
   amenities?: string[];
   hostPhone?: string;
   hostEmail?: string;
+  gatePin?: string; // 6-digit volunteer gate access PIN (e.g. "482910")
   createdAt: string;
   updatedAt: string;
 }
@@ -90,6 +91,9 @@ export interface Ticket {
   issuedAt: string;
   entryStatus: EntryStatus;
   entryTime?: string;
+  entryTimestamp?: string; // ISO-8601 exact timestamp for precise chronological gate ordering
+  verifiedBy?: 'organizer' | 'volunteer';
+  volunteerPin?: string;
   exitStatus: ExitStatus;
   exitTime?: string;
 }

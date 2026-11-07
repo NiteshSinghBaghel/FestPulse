@@ -12,7 +12,8 @@ import {
   Users, 
   BarChart3, 
   LogOut,
-  ChevronDown
+  ChevronDown,
+  KeyRound
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -21,6 +22,7 @@ interface NavbarProps {
   activeTab?: string;
   onNavigate?: (tab: string) => void;
   onOpenScanner?: () => void;
+  onOpenVolunteerScanner?: () => void;
   onOpenCreateEvent?: () => void;
   ticketCount?: number;
 }
@@ -30,6 +32,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeTab = 'home', 
   onNavigate,
   onOpenScanner,
+  onOpenVolunteerScanner,
   onOpenCreateEvent,
   ticketCount = 0
 }) => {
@@ -179,6 +182,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
           </div>
 
+          {/* Volunteer Gate Scanner Quick Button */}
+          <button
+            type="button"
+            onClick={() => onOpenVolunteerScanner && onOpenVolunteerScanner()}
+            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition cursor-pointer select-none"
+            title="Gate Volunteer Passcode Mode (Scan passes with 6-digit PIN)"
+          >
+            <KeyRound className="w-3.5 h-3.5 text-amber-700" />
+            <span>Gate PIN</span>
+          </button>
+
           {/* Profile Dropdown Container */}
           <div className="relative" ref={profileMenuRef}>
             <button
@@ -253,6 +267,23 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <div>
                       <div className="leading-tight">My Profile</div>
                       <div className="text-[10px] font-normal text-slate-400">View & edit account details</div>
+                    </div>
+                  </button>
+
+                  {/* Option 2: Gate Volunteer Mode */}
+                  <button
+                    onClick={() => {
+                      setIsProfileMenuOpen(false);
+                      if (onOpenVolunteerScanner) onOpenVolunteerScanner();
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-amber-900 hover:bg-amber-50 transition text-left cursor-pointer"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-amber-100 border border-amber-300 flex items-center justify-center text-amber-700 shrink-0">
+                      <KeyRound className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="leading-tight">Volunteer Gate Scanner</div>
+                      <div className="text-[10px] font-normal text-amber-700/80">Scan passes with 6-digit PIN</div>
                     </div>
                   </button>
 

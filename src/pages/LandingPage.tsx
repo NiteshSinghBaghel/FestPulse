@@ -15,15 +15,17 @@ import {
   Fingerprint,
   Radio,
   MapPin,
-  Flame
+  Flame,
+  KeyRound
 } from 'lucide-react';
 
 interface LandingPageProps {
   onLogin: (role: UserRole) => void;
   onExploreEvents?: () => void;
+  onOpenVolunteerScanner?: () => void;
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, onOpenVolunteerScanner }) => {
   const [isLoginMenuOpen, setIsLoginMenuOpen] = useState(false);
   const loginMenuTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -117,60 +119,90 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin }) => {
             <FestLogo size="md" variant="dark" subtitleText="🎓 Inter-College Event Network" />
           </div>
 
-          {/* ================= TOP-RIGHT: SIMPLE TEXT "Login" WITH CLEAN OPTIONS DIRECTLY BELOW ================= */}
-          <div 
-            className="relative shrink-0 flex flex-col items-end"
-            onMouseEnter={handleMouseEnterLogin}
-            onMouseLeave={handleMouseLeaveLogin}
-          >
+          {/* Right: Volunteer Gate Passcode Mode & Login */}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Direct Volunteer Gate Passcode Button */}
             <button
-              onClick={() => setIsLoginMenuOpen(!isLoginMenuOpen)}
-              className="py-1 px-1 text-black hover:text-sky-400 font-semibold text-sm tracking-wide transition-colors flex items-center gap-1 cursor-pointer select-none"
-              aria-haspopup="true"
-              aria-expanded={isLoginMenuOpen}
+              type="button"
+              onClick={() => onOpenVolunteerScanner && onOpenVolunteerScanner()}
+              className="py-1.5 px-3 rounded-full text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              title="Gate Volunteer Passcode Scanner (No password required)"
             >
-              <span>Login</span>
-              <ChevronDown className={`w-3.5 h-3.5 text-black hover:text-sky-400 transition-transform duration-200 ${isLoginMenuOpen ? 'rotate-180 text-sky-400' : ''}`} />
+              <KeyRound className="w-3.5 h-3.5 text-amber-700" />
+              <span className="hidden sm:inline">Gate Volunteer PIN</span>
+              <span className="sm:hidden">Gate PIN</span>
             </button>
 
-            {/* Hover Options directly below Login in clean small text */}
-            {isLoginMenuOpen && (
-              <div 
-                className="absolute right-0 top-full pt-1.5 z-50 animate-fade-in whitespace-nowrap"
-                onMouseEnter={handleMouseEnterLogin}
-                onMouseLeave={handleMouseLeaveLogin}
+            {/* Top-Right Login Dropdown */}
+            <div 
+              className="relative shrink-0 flex flex-col items-end"
+              onMouseEnter={handleMouseEnterLogin}
+              onMouseLeave={handleMouseLeaveLogin}
+            >
+              <button
+                onClick={() => setIsLoginMenuOpen(!isLoginMenuOpen)}
+                className="py-1 px-1 text-black hover:text-sky-400 font-semibold text-sm tracking-wide transition-colors flex items-center gap-1 cursor-pointer select-none"
+                aria-haspopup="true"
+                aria-expanded={isLoginMenuOpen}
               >
-                <div className="bg-white/95 backdrop-blur-md border border-slate-200/80 rounded-xl py-2 px-3 shadow-lg shadow-slate-200/50 flex flex-col items-start gap-1.5 min-w-[130px]">
-                  {/* Option 1: Student Login */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsLoginMenuOpen(false);
-                      onLogin('user');
-                    }}
-                    className="w-full text-left py-1 px-1.5 rounded-md text-xs font-semibold text-black hover:text-sky-400 hover:bg-sky-50/60 transition-colors cursor-pointer flex items-center justify-between group"
-                  >
-                    <span>Student Login</span>
-                    <span className="text-[10px] text-slate-400 group-hover:text-sky-400 transition-colors">→</span>
-                  </button>
+                <span>Login</span>
+                <ChevronDown className={`w-3.5 h-3.5 text-black hover:text-sky-400 transition-transform duration-200 ${isLoginMenuOpen ? 'rotate-180 text-sky-400' : ''}`} />
+              </button>
 
-                  <div className="w-full h-px bg-slate-100" />
+              {/* Hover Options directly below Login in clean small text */}
+              {isLoginMenuOpen && (
+                <div 
+                  className="absolute right-0 top-full pt-1.5 z-50 animate-fade-in whitespace-nowrap"
+                  onMouseEnter={handleMouseEnterLogin}
+                  onMouseLeave={handleMouseLeaveLogin}
+                >
+                  <div className="bg-white/95 backdrop-blur-md border border-slate-200/80 rounded-xl py-2 px-3 shadow-lg shadow-slate-200/50 flex flex-col items-start gap-1.5 min-w-[130px]">
+                    {/* Option 1: Student Login */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsLoginMenuOpen(false);
+                        onLogin('user');
+                      }}
+                      className="w-full text-left py-1 px-1.5 rounded-md text-xs font-semibold text-black hover:text-sky-400 hover:bg-sky-50/60 transition-colors cursor-pointer flex items-center justify-between group"
+                    >
+                      <span>Student Login</span>
+                      <span className="text-[10px] text-slate-400 group-hover:text-sky-400 transition-colors">→</span>
+                    </button>
 
-                  {/* Option 2: Host Login */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsLoginMenuOpen(false);
-                      onLogin('host');
-                    }}
-                    className="w-full text-left py-1 px-1.5 rounded-md text-xs font-semibold text-black hover:text-sky-400 hover:bg-sky-50/60 transition-colors cursor-pointer flex items-center justify-between group"
-                  >
-                    <span>Host Login</span>
-                    <span className="text-[10px] text-slate-400 group-hover:text-sky-400 transition-colors">→</span>
-                  </button>
+                    <div className="w-full h-px bg-slate-100" />
+
+                    {/* Option 2: Host Login */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsLoginMenuOpen(false);
+                        onLogin('host');
+                      }}
+                      className="w-full text-left py-1 px-1.5 rounded-md text-xs font-semibold text-black hover:text-sky-400 hover:bg-sky-50/60 transition-colors cursor-pointer flex items-center justify-between group"
+                    >
+                      <span>Host Login</span>
+                      <span className="text-[10px] text-slate-400 group-hover:text-sky-400 transition-colors">→</span>
+                    </button>
+
+                    <div className="w-full h-px bg-slate-100" />
+
+                    {/* Option 3: Gate Volunteer PIN */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsLoginMenuOpen(false);
+                        if (onOpenVolunteerScanner) onOpenVolunteerScanner();
+                      }}
+                      className="w-full text-left py-1 px-1.5 rounded-md text-xs font-semibold text-amber-800 hover:text-amber-900 hover:bg-amber-50 transition-colors cursor-pointer flex items-center justify-between group"
+                    >
+                      <span>Gate Volunteer PIN</span>
+                      <span className="text-[10px] text-amber-600 group-hover:text-amber-800 transition-colors">→</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </header>

@@ -230,7 +230,14 @@ export class StorageService {
         !e.eventId.startsWith('evt-ai-workshop') && 
         !e.eventId.startsWith('evt-inter-college-derby') &&
         !e.eventId.startsWith('evt-muefnnqg-duty')
-      );
+      ).map(e => {
+        if (!e.gatePin) {
+          // Generate stable deterministic 6-digit gate PIN based on eventId
+          const hash = Math.abs(e.eventId.split('').reduce((acc, c) => ((acc << 5) - acc) + c.charCodeAt(0), 0));
+          e.gatePin = ((hash % 900000) + 100000).toString();
+        }
+        return e;
+      });
       if (cleaned.length !== parsed.length) {
         this.saveEvents(cleaned);
       }
@@ -242,6 +249,9 @@ export class StorageService {
 
   static saveEvents(events: CollegeEvent[]): void {
     localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(events));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('campuspass_data_updated'));
+    }
   }
 
   static getEventById(eventId: string): CollegeEvent | undefined {
@@ -249,19 +259,27 @@ export class StorageService {
   }
 
   /**
-   * Strictly filters and returns events owned by the specified organizer ID.
+   * Strictly filters and returns events owned by the specified organizer ID or email.
    */
-  static getHostEvents(organizerId: string): CollegeEvent[] {
-    if (!organizerId) return [];
-    const cleanId = organizerId.trim();
-    return this.getEvents().filter(e => e.hostId === cleanId);
+  static getHostEvents(organizerId: string, organizerEmail?: string): CollegeEvent[] {
+    if (!organizerId && !organizerEmail) return [];
+    const cleanId = organizerId ? organizerId.trim() : '';
+    const cleanEmail = organizerEmail ? organizerEmail.toLowerCase().trim() : '';
+    return this.getEvents().filter(e => {
+      if (cleanId && e.hostId === cleanId) return true;
+      if (cleanEmail && e.hostEmail && e.hostEmail.toLowerCase().trim() === cleanEmail) return true;
+      return false;
+    });
   }
 
   static createEvent(eventData: Omit<CollegeEvent, 'eventId' | 'createdAt' | 'updatedAt' | 'ticketsSold' | 'availableTickets'>): CollegeEvent {
     const events = this.getEvents();
+    // Generate secure 6-digit numeric gate PIN for volunteer scanner
+    const randomGatePin = Math.floor(100000 + Math.random() * 900000).toString();
     const newEvent: CollegeEvent = {
       ...eventData,
       eventId: `evt-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+      gatePin: eventData.gatePin || randomGatePin,
       ticketsSold: 0,
       availableTickets: eventData.capacity,
       createdAt: new Date().toISOString(),
@@ -450,6 +468,9 @@ export class StorageService {
 
   static saveTickets(tickets: Ticket[]): void {
     localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(tickets));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('campuspass_data_updated'));
+    }
   }
 
   static saveNewTicket(ticket: Ticket): void {
@@ -497,20 +518,26 @@ export class StorageService {
   }
 
   /**
-   * Strictly filters and returns tickets belonging to events owned by the specified organizer ID.
+   * Strictly filters and returns tickets belonging to events owned by the specified organizer ID or email.
+   * Zero data from other organizers is allowed.
    */
-  static getHostTickets(organizerId: string): Ticket[] {
-    if (!organizerId) return [];
-    const cleanId = organizerId.trim();
-    const hostEvents = this.getHostEvents(cleanId);
+  static getHostTickets(organizerId: string, organizerEmail?: string): Ticket[] {
+    if (!organizerId && !organizerEmail) return [];
+    const cleanId = organizerId ? organizerId.trim() : '';
+    const cleanEmail = organizerEmail ? organizerEmail.toLowerCase().trim() : '';
+    const hostEvents = this.getHostEvents(cleanId, cleanEmail);
     const hostEventIds = new Set(hostEvents.map(e => e.eventId));
-    return this.getTickets().filter(t => t.hostId === cleanId || hostEventIds.has(t.eventId));
+    return this.getTickets().filter(t => {
+      if (hostEventIds.has(t.eventId)) return true;
+      if (cleanId && t.hostId === cleanId) return true;
+      return false;
+    });
   }
 
   /**
-   * Calculates financial metrics and gross revenue strictly for the specified organizer ID.
+   * Calculates financial metrics and gross revenue strictly for the specified organizer ID or email.
    */
-  static getHostRevenue(organizerId: string): {
+  static getHostRevenue(organizerId: string, organizerEmail?: string): {
     totalEvents: number;
     totalTicketsSold: number;
     ticketsRevenue: number;
@@ -520,7 +547,7 @@ export class StorageService {
     totalTransferred: number;
     availableBalance: number;
   } {
-    if (!organizerId) {
+    if (!organizerId && !organizerEmail) {
       return {
         totalEvents: 0,
         totalTicketsSold: 0,
@@ -532,9 +559,10 @@ export class StorageService {
         availableBalance: 0,
       };
     }
-    const cleanId = organizerId.trim();
-    const hostEvents = this.getHostEvents(cleanId);
-    const hostTickets = this.getHostTickets(cleanId);
+    const cleanId = organizerId ? organizerId.trim() : '';
+    const cleanEmail = organizerEmail ? organizerEmail.toLowerCase().trim() : '';
+    const hostEvents = this.getHostEvents(cleanId, cleanEmail);
+    const hostTickets = this.getHostTickets(cleanId, cleanEmail);
     const hostPayouts = this.getPayouts(cleanId);
 
     const totalEvents = hostEvents.length;
@@ -573,6 +601,136 @@ export class StorageService {
 
   static getTicketByToken(token: string): Ticket | undefined {
     return this.getTickets().find(t => t.qrToken === token || t.ticketId === token);
+  }
+
+  /**
+   * Validates a 6-digit volunteer gate passcode and returns the associated event.
+   * Protects organizer privacy: Gives zero access to organizer revenue, payouts, bank details, or editing.
+   */
+  static validateVolunteerGatePin(gatePin: string): CollegeEvent | null {
+    if (!gatePin) return null;
+    const cleanPin = gatePin.trim();
+    if (cleanPin.length !== 6) return null;
+    const events = this.getEvents();
+    const event = events.find(e => e.gatePin === cleanPin);
+    if (!event || event.status === 'cancelled') return null;
+    return event;
+  }
+
+  /**
+   * Dedicated Volunteer Gate Verification:
+   * Gate volunteers can only scan and admit attendees for this specific event.
+   * Volunteers have ZERO access to revenue, payouts, bank details, or event management.
+   */
+  static verifyVolunteerScan(
+    qrToken: string,
+    gatePin: string,
+    targetEventId: string
+  ): ScannerScanResult {
+    const cleanToken = (qrToken || '').trim();
+    const cleanPin = (gatePin || '').trim();
+    const event = this.getEventById(targetEventId);
+
+    if (!event || event.gatePin !== cleanPin) {
+      return {
+        success: false,
+        message: 'Invalid Gate PIN session. Scanner expired or unauthorized.',
+        code: 'WRONG_HOST_OR_EVENT'
+      };
+    }
+
+    const tickets = this.getTickets();
+    const ticketIndex = tickets.findIndex(t => t.qrToken === cleanToken || t.ticketId === cleanToken);
+
+    if (ticketIndex === -1) {
+      return {
+        success: false,
+        message: 'Invalid Ticket QR. No matching ticket found in database.',
+        code: 'INVALID_TOKEN'
+      };
+    }
+
+    const ticket = tickets[ticketIndex];
+
+    // Ensure ticket strictly belongs to this event!
+    if (ticket.eventId !== targetEventId) {
+      const ticketEvent = this.getEventById(ticket.eventId);
+      const otherEventTitle = ticket.eventTitle || ticketEvent?.title || 'Another Event';
+      return {
+        success: false,
+        message: `WRONG EVENT PASS! This pass is registered for "${otherEventTitle}", not "${event.title}". Gate entry denied.`,
+        ticket,
+        code: 'WRONG_HOST_OR_EVENT'
+      };
+    }
+
+    // Check status
+    if (ticket.status === 'cancelled' || ticket.status === 'refunded') {
+      return {
+        success: false,
+        message: `Ticket is ${ticket.status.toUpperCase()} and cannot be used.`,
+        ticket,
+        code: 'TICKET_CANCELLED'
+      };
+    }
+
+    // Strictly Entry-Only: Check if already entered
+    if (ticket.entryStatus === 'entered') {
+      return {
+        success: false,
+        message: `ALREADY USED! Checked in at ${ticket.entryTime || 'earlier today'}. Duplicate entry rejected!`,
+        ticket,
+        code: 'ALREADY_ENTERED'
+      };
+    }
+
+    const now = new Date();
+    const nowDisplay = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const nowTimestamp = now.toISOString();
+
+    const updatedTicket: Ticket = {
+      ...ticket,
+      entryStatus: 'entered',
+      entryTime: nowDisplay,
+      entryTimestamp: nowTimestamp,
+      verifiedBy: 'volunteer',
+      volunteerPin: cleanPin,
+      exitStatus: 'not_exited'
+    };
+
+    tickets[ticketIndex] = updatedTicket;
+    this.saveTickets(tickets);
+
+    // 1. Sync to Cloud API
+    fetch(`/api/tickets/${updatedTicket.ticketId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entryStatus: 'entered',
+        entryTime: nowDisplay,
+        entryTimestamp: nowTimestamp,
+        verifiedBy: 'volunteer',
+        volunteerGatePin: cleanPin,
+        exitStatus: 'not_exited'
+      }),
+    }).catch(() => {});
+
+    // 2. Sync to Firestore
+    FirebaseDbService.updateTicket(updatedTicket.ticketId, {
+      entryStatus: 'entered',
+      entryTime: nowDisplay,
+      entryTimestamp: nowTimestamp,
+      verifiedBy: 'volunteer',
+      volunteerPin: cleanPin,
+      exitStatus: 'not_exited'
+    }).catch(e => console.warn('Cloud volunteer updateTicket error:', e));
+
+    return {
+      success: true,
+      message: `ENTRY GRANTED! Welcome ${updatedTicket.userName}. Pass verified successfully by Gate Staff.`,
+      ticket: updatedTicket,
+      code: 'VALID'
+    };
   }
 
   // Scanner Verification: Strictly Entry-Only Gate Verification with Strict Host & Event Ownership Check
@@ -627,7 +785,9 @@ export class StorageService {
       };
     }
 
-    const nowIso = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const now = new Date();
+    const nowDisplay = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const nowTimestamp = now.toISOString();
 
     // Strictly Entry-Only: Check if already entered
     if (ticket.entryStatus === 'entered') {
@@ -639,11 +799,13 @@ export class StorageService {
       };
     }
 
-    // Record entry check-in
+    // Record entry check-in with exact ISO timestamp for precise reverse-chronological ordering
     const updatedTicket: Ticket = {
       ...ticket,
       entryStatus: 'entered',
-      entryTime: nowIso,
+      entryTime: nowDisplay,
+      entryTimestamp: nowTimestamp,
+      verifiedBy: 'organizer',
       exitStatus: 'not_exited'
     };
 
@@ -656,7 +818,9 @@ export class StorageService {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         entryStatus: 'entered',
-        entryTime: nowIso,
+        entryTime: nowDisplay,
+        entryTimestamp: nowTimestamp,
+        verifiedBy: 'organizer',
         exitStatus: 'not_exited',
         requestingHostId: currentHostId,
         requestingHostEmail: currentHostEmail
@@ -666,7 +830,9 @@ export class StorageService {
     // 2. Sync to Firestore
     FirebaseDbService.updateTicket(updatedTicket.ticketId, {
       entryStatus: 'entered',
-      entryTime: nowIso,
+      entryTime: nowDisplay,
+      entryTimestamp: nowTimestamp,
+      verifiedBy: 'organizer',
       exitStatus: 'not_exited'
     }).catch(e => console.warn('Cloud updateTicket check-in error:', e));
 

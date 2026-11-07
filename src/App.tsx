@@ -13,6 +13,7 @@ import { HostAttendeesPage } from './pages/HostAttendeesPage';
 import { AuthPage } from './pages/AuthPage';
 import { LandingPage } from './pages/LandingPage';
 import { QrScannerModal } from './components/QrScannerModal';
+import { VolunteerGateScannerModal } from './components/VolunteerGateScannerModal';
 import { CreateEventModal } from './components/CreateEventModal';
 import { DigitalTicket } from './components/DigitalTicket';
 import { Footer } from './components/Footer';
@@ -29,9 +30,23 @@ export const App: React.FC = () => {
 
   // Modals State
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [isVolunteerScannerOpen, setIsVolunteerScannerOpen] = useState(false);
+  const [volunteerGatePin, setVolunteerGatePin] = useState<string>('');
   const [isCreateEventOpen, setIsCreateEventOpen] = useState(false);
   const [newlyPurchasedTicket, setNewlyPurchasedTicket] = useState<Ticket | null>(null);
   const [prefilledScanTicket, setPrefilledScanTicket] = useState<Ticket | null>(null);
+
+  // Check URL parameters for direct volunteer gate scanner link (?gatePin=482910)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const pin = params.get('gatePin') || params.get('volunteerGatePin');
+      if (pin && pin.trim().length === 6) {
+        setVolunteerGatePin(pin.trim());
+        setIsVolunteerScannerOpen(true);
+      }
+    }
+  }, []);
 
   // App Data
   const [events, setEvents] = useState<CollegeEvent[]>([]);
@@ -153,25 +168,45 @@ export const App: React.FC = () => {
   };
 
   if (!currentUser) {
-    if (landingView === 'landing') {
-      return (
-        <LandingPage
-          onLogin={(chosenRole) => {
-            handleNavigateToLogin(chosenRole);
-          }}
-          onExploreEvents={() => {
-            handleNavigateToLogin('user');
-          }}
-        />
-      );
-    }
     return (
-      <AuthPage 
-        onSuccess={refreshData} 
-        initialRole={targetLoginRole}
-        onBackToLanding={handleBackToLanding}
-        onSwitchRole={(newRole) => setTargetLoginRole(newRole)}
-      />
+      <>
+        {landingView === 'landing' ? (
+          <LandingPage
+            onLogin={(chosenRole) => {
+              handleNavigateToLogin(chosenRole);
+            }}
+            onExploreEvents={() => {
+              handleNavigateToLogin('user');
+            }}
+            onOpenVolunteerScanner={() => {
+              setVolunteerGatePin('');
+              setIsVolunteerScannerOpen(true);
+            }}
+          />
+        ) : (
+          <AuthPage 
+            onSuccess={refreshData} 
+            initialRole={targetLoginRole}
+            onBackToLanding={handleBackToLanding}
+            onSwitchRole={(newRole) => setTargetLoginRole(newRole)}
+            onOpenVolunteerScanner={() => {
+              setVolunteerGatePin('');
+              setIsVolunteerScannerOpen(true);
+            }}
+          />
+        )}
+
+        {/* Volunteer Gate Scanner Modal for Door Staff (zero login required) */}
+        <VolunteerGateScannerModal
+          isOpen={isVolunteerScannerOpen}
+          onClose={() => {
+            setIsVolunteerScannerOpen(false);
+            setVolunteerGatePin('');
+          }}
+          initialGatePin={volunteerGatePin}
+          onScanSuccess={refreshData}
+        />
+      </>
     );
   }
 
@@ -192,6 +227,10 @@ export const App: React.FC = () => {
         onOpenScanner={() => {
           setPrefilledScanTicket(null);
           setIsScannerOpen(true);
+        }}
+        onOpenVolunteerScanner={() => {
+          setVolunteerGatePin('');
+          setIsVolunteerScannerOpen(true);
         }}
         onOpenCreateEvent={() => setIsCreateEventOpen(true)}
         ticketCount={tickets.filter(t => t.entryStatus !== 'entered').length}
@@ -247,6 +286,10 @@ export const App: React.FC = () => {
                     onOpenScanner={() => {
                       setPrefilledScanTicket(null);
                       setIsScannerOpen(true);
+                    }}
+                    onOpenVolunteerScanner={(pin) => {
+                      setVolunteerGatePin(pin || '');
+                      setIsVolunteerScannerOpen(true);
                     }}
                     onViewAttendees={(evt) => {
                       setSelectedAttendeeEvent(evt || null);
@@ -308,6 +351,17 @@ export const App: React.FC = () => {
         }}
         onScanSuccess={refreshData}
         prefilledTicket={prefilledScanTicket}
+      />
+
+      {/* Volunteer Gate Staff Scanner Modal (Zero Organizer Login Required) */}
+      <VolunteerGateScannerModal
+        isOpen={isVolunteerScannerOpen}
+        onClose={() => {
+          setIsVolunteerScannerOpen(false);
+          setVolunteerGatePin('');
+        }}
+        initialGatePin={volunteerGatePin}
+        onScanSuccess={refreshData}
       />
 
       {/* Create Event Modal for Host */}

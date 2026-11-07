@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { CollegeEvent } from '../types';
+import { useAuth } from '../context/AuthContext';
+import { VolunteerGateShareModal } from './VolunteerGateShareModal';
 import { 
   Calendar, 
   Clock, 
@@ -9,7 +11,8 @@ import {
   Share2, 
   Ticket as TicketIcon,
   CheckCircle2,
-  Users
+  Users,
+  KeyRound
 } from 'lucide-react';
 
 interface EventCardProps {
@@ -31,6 +34,10 @@ export const EventCard: React.FC<EventCardProps> = ({
   isBookmarked = false,
   onToggleBookmark
 }) => {
+  const { currentUser } = useAuth();
+  const [isGateShareOpen, setIsGateShareOpen] = useState(false);
+  const isHost = (currentUser?.uid && currentUser.uid === event.hostId) || 
+                 (currentUser?.email && currentUser.email === event.hostEmail);
   const percentBooked = Math.round((event.ticketsSold / event.capacity) * 100);
   const isSoldOut = event.status === 'sold_out' || event.availableTickets <= 0;
   const [copied, setCopied] = useState(false);
@@ -111,6 +118,20 @@ export const EventCard: React.FC<EventCardProps> = ({
         </div>
 
         <div className="flex items-center gap-2 w-full sm:w-auto justify-end pt-2.5 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+          {isHost && event.gatePin && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsGateShareOpen(true);
+              }}
+              className="py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs shadow-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+              title="Get volunteer gate passcode & direct scanner link"
+            >
+              <KeyRound className="w-3.5 h-3.5 stroke-[2.4]" />
+              <span>Volunteer Code & Link</span>
+            </button>
+          )}
+
           <button
             onClick={handleBookmark}
             aria-label="Bookmark event"
@@ -144,6 +165,15 @@ export const EventCard: React.FC<EventCardProps> = ({
             <span>{isSoldOut ? 'Sold Out' : 'Book'}</span>
           </button>
         </div>
+
+        {/* Volunteer Gate Access Share Modal */}
+        {isHost && (
+          <VolunteerGateShareModal
+            event={event}
+            isOpen={isGateShareOpen}
+            onClose={() => setIsGateShareOpen(false)}
+          />
+        )}
       </div>
     );
   }
@@ -253,6 +283,22 @@ export const EventCard: React.FC<EventCardProps> = ({
           </span>
         </div>
 
+        {/* If Viewer is Host: Quick Volunteer Gate Code & Link Button */}
+        {isHost && event.gatePin && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsGateShareOpen(true);
+            }}
+            className="mt-3 w-full py-2.5 px-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-2xs transition active:scale-[0.98] cursor-pointer"
+            title="Get volunteer gate passcode & direct scanner link"
+          >
+            <KeyRound className="w-4 h-4 stroke-[2.4]" />
+            <span>Volunteer Code & Link (Gate)</span>
+          </button>
+        )}
+
         {/* Full-width Book Now Button */}
         <button
           onClick={(e) => {
@@ -261,12 +307,21 @@ export const EventCard: React.FC<EventCardProps> = ({
             else onSelect(event);
           }}
           disabled={isSoldOut}
-          className="mt-4 w-full py-3.5 px-4 rounded-2xl bg-[#545df7] hover:bg-[#434de6] disabled:opacity-50 text-white font-black text-sm flex items-center justify-center gap-2 shadow-md transition active:scale-[0.98]"
+          className="mt-3 w-full py-3.5 px-4 rounded-2xl bg-[#545df7] hover:bg-[#434de6] disabled:opacity-50 text-white font-black text-sm flex items-center justify-center gap-2 shadow-md transition active:scale-[0.98]"
         >
           <span>→</span>
           <span>{isSoldOut ? 'Sold Out' : 'Book now'}</span>
         </button>
       </div>
+
+      {/* Volunteer Gate Access Share Modal */}
+      {isHost && (
+        <VolunteerGateShareModal
+          event={event}
+          isOpen={isGateShareOpen}
+          onClose={() => setIsGateShareOpen(false)}
+        />
+      )}
     </div>
   );
 };

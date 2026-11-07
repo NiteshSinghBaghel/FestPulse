@@ -6,6 +6,7 @@ import { EditEventModal } from '../components/EditEventModal';
 import { HostPayoutModal } from '../components/HostPayoutModal';
 import { PayoutInvoiceModal, downloadPayoutInvoice } from '../components/PayoutInvoiceModal';
 import { TicketSalesAnalyticsChart } from '../components/TicketSalesAnalyticsChart';
+import { VolunteerGateShareModal } from '../components/VolunteerGateShareModal';
 import { 
   BarChart3, 
   Users, 
@@ -34,7 +35,14 @@ import {
   Receipt,
   CreditCard,
   Zap,
-  Settings
+  Settings,
+  KeyRound,
+  Copy,
+  Check,
+  Share2,
+  MessageCircle,
+  ExternalLink,
+  X
 } from 'lucide-react';
 
 interface HostDashboardPageProps {
@@ -43,6 +51,7 @@ interface HostDashboardPageProps {
   onChangeTab?: (tab: string) => void;
   onOpenCreateEvent: () => void;
   onOpenScanner: () => void;
+  onOpenVolunteerScanner?: (gatePin?: string) => void;
   onViewAttendees: (event?: CollegeEvent) => void;
   onSelectEvent: (event: CollegeEvent) => void;
   onEventsUpdated: () => void;
@@ -54,6 +63,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
   onChangeTab,
   onOpenCreateEvent,
   onOpenScanner,
+  onOpenVolunteerScanner,
   onViewAttendees,
   onSelectEvent,
   onEventsUpdated,
@@ -65,10 +75,18 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     currentTab === 'host-events' ? 'events' : 
     currentTab === 'host-analytics' ? 'revenue' : 'overview';
   const [editingEvent, setEditingEvent] = useState<CollegeEvent | null>(null);
+  const [payoutsVersion, setPayoutsVersion] = useState<number>(0);
   const [isPayoutModalOpen, setIsPayoutModalOpen] = useState(false);
   const [selectedInvoicePayout, setSelectedInvoicePayout] = useState<PayoutRecord | null>(null);
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
-  const [payoutsVersion, setPayoutsVersion] = useState(0);
+  const [copiedPinEventId, setCopiedPinEventId] = useState<string | null>(null);
+  const [qrModalEvent, setQrModalEvent] = useState<CollegeEvent | null>(null);
+
+  const handleShareWhatsApp = (evt: CollegeEvent) => {
+    const url = `${window.location.origin}?gatePin=${evt.gatePin}`;
+    const msg = `🎟️ *CampusPass Gate Entry Scanner Access*\n\nEvent: *${evt.title}*\nVenue: ${evt.venue}\nDate: ${evt.date}\n\n🔑 *Gate PIN*: *${evt.gatePin}*\n\n📲 *Direct Scanner Link*: ${url}\n\n_Open this link on your phone to scan and verify student passes at the door._`;
+    window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, '_blank');
+  };
 
   // Auto-listen to cloud database sync and storage changes
   useEffect(() => {
@@ -84,24 +102,25 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
   }, []);
 
   const organizerId = currentUser?.uid || '';
+  const organizerEmail = currentUser?.email || '';
 
-  // Filter events strictly by the current user's organizer ID
+  // Filter events strictly by the current user's organizer ID or email
   const hostEvents = useMemo(() => {
-    if (!organizerId) return [];
-    return StorageService.getHostEvents(organizerId);
-  }, [events, organizerId]);
+    if (!organizerId && !organizerEmail) return [];
+    return StorageService.getHostEvents(organizerId, organizerEmail);
+  }, [events, organizerId, organizerEmail]);
 
   const allTickets = StorageService.getTickets();
 
-  // Filter tickets strictly by the current user's organizer ID
+  // Filter tickets strictly by the current user's organizer ID or email
   const hostTickets = useMemo(() => {
-    if (!organizerId) return [];
-    return StorageService.getHostTickets(organizerId);
-  }, [allTickets, organizerId, hostEvents]);
+    if (!organizerId && !organizerEmail) return [];
+    return StorageService.getHostTickets(organizerId, organizerEmail);
+  }, [allTickets, organizerId, organizerEmail, hostEvents, payoutsVersion]);
 
   // Compute Statistics & Financial Revenue strictly by organizer ID
   const hostRevenueData = useMemo(() => {
-    if (!organizerId) {
+    if (!organizerId && !organizerEmail) {
       return {
         totalEvents: 0,
         totalTicketsSold: 0,
@@ -113,8 +132,8 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
         availableBalance: 0,
       };
     }
-    return StorageService.getHostRevenue(organizerId);
-  }, [organizerId, hostEvents, hostTickets, payoutsVersion]);
+    return StorageService.getHostRevenue(organizerId, organizerEmail);
+  }, [organizerId, organizerEmail, hostEvents, hostTickets, payoutsVersion]);
 
   const {
     totalEvents,
@@ -437,7 +456,180 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
             </div>
           </div>
 
-          {/* DYNAMIC & RESPONSIVE: Recent Gate Entries (User requested mobile-optimized fix) */}
+          {/* VOLUNTEER GATE PASSCODES & ZERO-FINANCIAL ACCESS STAFF SCANNER */}
+          <div className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-white border-2 border-amber-300 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-amber-200/60 mb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-md shadow-amber-500/20">
+                  <KeyRound className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-black text-slate-900">Volunteer Gate Passcodes</h3>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-200 text-amber-950 border border-amber-300">
+                      Zero Financial Access
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    Share a 6-digit PIN with gate volunteers so they can scan tickets without seeing your revenue, payouts, or bank details.
+                  </p>
+                </div>
+              </div>
+
+              {hostEvents.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => onOpenVolunteerScanner && onOpenVolunteerScanner(hostEvents[0]?.gatePin)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition shadow-xs cursor-pointer self-start sm:self-auto shrink-0"
+                >
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>Open Volunteer Mode</span>
+                </button>
+              )}
+            </div>
+
+            {hostEvents.length === 0 ? (
+              <p className="text-xs text-slate-500 italic py-2">Create an event to generate your 6-digit volunteer gate PIN.</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {hostEvents.map((evt) => (
+                  <div
+                    key={evt.eventId}
+                    className="p-3 sm:p-3.5 rounded-2xl bg-white border border-amber-200 shadow-2xs flex flex-col justify-between gap-2.5"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h4 className="text-xs font-black text-slate-900 truncate">{evt.title}</h4>
+                        <p className="text-[10px] text-slate-500 truncate flex items-center gap-1 mt-0.5">
+                          <span>{evt.venue}</span> • <span>{evt.date}</span>
+                        </p>
+                      </div>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-black bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                        {hostTickets.filter(t => t.eventId === evt.eventId && t.entryStatus === 'entered').length} In
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Gate PIN:</span>
+                        <span className="font-mono text-sm font-black tracking-widest px-2.5 py-0.5 rounded-lg bg-amber-100 text-amber-950 border border-amber-300 select-all">
+                          {evt.gatePin || '482910'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {/* Copy PIN */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(evt.gatePin || '');
+                            setCopiedPinEventId(evt.eventId);
+                            setTimeout(() => setCopiedPinEventId(null), 2000);
+                          }}
+                          className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-amber-900 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                          title="Copy 6-digit PIN"
+                        >
+                          {copiedPinEventId === evt.eventId ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-600" />
+                              <span className="text-emerald-700">Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-slate-500" />
+                              <span>Copy PIN</span>
+                            </>
+                          )}
+                        </button>
+
+                        {/* WhatsApp 1-Click Share */}
+                        <button
+                          type="button"
+                          onClick={() => handleShareWhatsApp(evt)}
+                          className="px-2 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                          title="Send directly to WhatsApp volunteer group"
+                        >
+                          <MessageCircle className="w-3 h-3 text-emerald-600" />
+                          <span>WhatsApp</span>
+                        </button>
+
+                        {/* Volunteer Code & Link Modal */}
+                        <button
+                          type="button"
+                          onClick={() => setQrModalEvent(evt)}
+                          className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 text-[11px] font-black transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                          title="View 6-Digit Gate Code & Direct Scanner Link"
+                        >
+                          <KeyRound className="w-3 h-3 stroke-[2.4]" />
+                          <span>Code & Link</span>
+                        </button>
+
+                        {/* Copy Link */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const url = `${window.location.origin}?gatePin=${evt.gatePin}`;
+                            navigator.clipboard.writeText(url);
+                            setCopiedPinEventId(`link-${evt.eventId}`);
+                            setTimeout(() => setCopiedPinEventId(null), 2000);
+                          }}
+                          className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                          title="Copy Direct Scanner Link for Gate Volunteer Phone"
+                        >
+                          {copiedPinEventId === `link-${evt.eventId}` ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-600" />
+                              <span className="text-emerald-700">Link Copied</span>
+                            </>
+                          ) : (
+                            <>
+                              <Share2 className="w-3 h-3 text-slate-500" />
+                              <span>Copy Link</span>
+                            </>
+                          )}
+                        </button>
+
+                        {/* Launch Scanner */}
+                        <button
+                          type="button"
+                          onClick={() => onOpenVolunteerScanner && onOpenVolunteerScanner(evt.gatePin)}
+                          className="px-2 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                          title="Open Volunteer Scanner"
+                        >
+                          <Smartphone className="w-3 h-3 text-amber-700" />
+                          <span>Scan</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Quick 3-Step Guide for Sharing */}
+            <div className="mt-3.5 p-3 rounded-2xl bg-white/80 border border-amber-200/80 text-[11px] text-slate-700">
+              <span className="font-black text-amber-950 uppercase tracking-wide flex items-center gap-1 mb-1">
+                <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                <span>3 Easy Ways to Share with Volunteers at the Entrance:</span>
+              </span>
+              <ul className="grid grid-cols-1 sm:grid-cols-3 gap-2 mt-1 text-slate-600">
+                <li className="bg-amber-50/60 p-2 rounded-xl border border-amber-100">
+                  <strong className="text-slate-900 block font-bold mb-0.5">1. WhatsApp Button</strong>
+                  Click <strong>WhatsApp</strong> above to send the invite & direct scanner link to your gate volunteer team.
+                </li>
+                <li className="bg-amber-50/60 p-2 rounded-xl border border-amber-100">
+                  <strong className="text-slate-900 block font-bold mb-0.5">2. Show QR Code</strong>
+                  Click <strong>Show QR</strong> — volunteers simply point their phone camera at your screen to open the scanner.
+                </li>
+                <li className="bg-amber-50/60 p-2 rounded-xl border border-amber-100">
+                  <strong className="text-slate-900 block font-bold mb-0.5">3. 6-Digit Gate PIN</strong>
+                  Volunteers open the website on their phone, tap <strong>Gate PIN</strong> at top, and enter your 6-digit PIN.
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          {/* DYNAMIC & RESPONSIVE: Recent Gate Entries (Strictly this organizer's events & newest first on top) */}
           <div className="p-4 sm:p-5 rounded-3xl bg-white border border-slate-200 shadow-xs">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100 mb-3">
               <div className="flex items-center gap-2">
@@ -446,7 +638,9 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                 </div>
                 <div>
                   <h3 className="text-sm font-black text-slate-900">Recent Gate Check-in Entries</h3>
-                  <p className="text-[11px] text-slate-500">Live stream of student pass entries at physical entrance</p>
+                  <p className="text-[11px] text-slate-500">
+                    Live stream of attendees entered for your events (latest scan at top)
+                  </p>
                 </div>
               </div>
 
@@ -456,7 +650,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                 </span>
                 <button
                   onClick={() => onViewAttendees()}
-                  className="text-xs text-indigo-600 hover:text-indigo-800 font-bold transition flex items-center gap-1"
+                  className="text-xs text-indigo-600 hover:text-indigo-800 font-bold transition flex items-center gap-1 cursor-pointer"
                 >
                   <span>Full Ledger</span>
                   <ArrowRight className="w-3.5 h-3.5" />
@@ -466,9 +660,15 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
 
             {/* Responsive List / Cards: Perfect fit on both mobile screens and desktops */}
             {(() => {
+              // STRICT ORGANIZER ISOLATION + DETERMINISTIC NEWEST-FIRST AT TOP
               const enteredTickets = hostTickets
                 .filter(t => t.entryStatus === 'entered')
-                .sort((a, b) => (b.entryTime || '').localeCompare(a.entryTime || ''));
+                .sort((a, b) => {
+                  const timeB = b.entryTimestamp ? new Date(b.entryTimestamp).getTime() : 0;
+                  const timeA = a.entryTimestamp ? new Date(a.entryTimestamp).getTime() : 0;
+                  if (timeB !== timeA) return timeB - timeA;
+                  return (b.entryTime || '').localeCompare(a.entryTime || '');
+                });
 
               if (enteredTickets.length === 0) {
                 return (
@@ -476,34 +676,58 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                     <TicketIcon className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                     <p className="text-xs font-bold text-slate-600">No gate check-ins recorded yet</p>
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      Use the "Gate Scanner" button above to verify student QR passes at the entrance.
+                      Use the "Gate Scanner" button above or share your Volunteer PIN with door staff to verify student QR passes.
                     </p>
                   </div>
                 );
               }
 
               return (
-                <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
-                  {enteredTickets.slice(0, 10).map((ticket) => (
+                <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
+                  {enteredTickets.slice(0, 15).map((ticket, idx) => (
                     <div
                       key={ticket.ticketId}
-                      className="p-3 sm:p-3.5 rounded-2xl bg-slate-50 hover:bg-slate-100/80 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition"
+                      className={`p-3 sm:p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition ${
+                        idx === 0
+                          ? 'bg-emerald-50/70 border-emerald-300 ring-2 ring-emerald-500/20 shadow-xs'
+                          : 'bg-slate-50 hover:bg-slate-100/80 border-slate-200'
+                      }`}
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-600 text-white font-black text-xs flex items-center justify-center shrink-0 shadow-2xs">
+                        <div className={`w-10 h-10 rounded-xl font-black text-xs flex items-center justify-center shrink-0 shadow-2xs ${
+                          idx === 0
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-gradient-to-tr from-emerald-500 to-teal-600 text-white'
+                        }`}>
                           {ticket.userName?.charAt(0) || 'S'}
                         </div>
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
+                            {idx === 0 && (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-emerald-600 text-white animate-pulse">
+                                JUST ENTERED • TOP
+                              </span>
+                            )}
                             <h4 className="text-xs font-bold text-slate-900 truncate">
                               {ticket.userName}
                             </h4>
                             <span className="font-mono text-[10px] font-black text-indigo-600 bg-white px-1.5 py-0.5 rounded border border-slate-200">
                               {ticket.ticketId}
                             </span>
+                            <span className="text-[10px] text-slate-600 bg-white px-1.5 py-0.5 rounded border border-slate-200 font-semibold truncate max-w-[150px]">
+                              {ticket.eventTitle}
+                            </span>
                           </div>
-                          <p className="text-[11px] text-slate-500 truncate mt-0.5">
-                            {ticket.userEmail} {ticket.rollNo ? `• Roll: ${ticket.rollNo}` : ''}
+                          <p className="text-[11px] text-slate-500 truncate mt-0.5 flex items-center gap-1.5">
+                            <span>{ticket.userEmail} {ticket.rollNo ? `• Roll: ${ticket.rollNo}` : ''}</span>
+                            <span>•</span>
+                            <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                              ticket.verifiedBy === 'volunteer'
+                                ? 'bg-amber-100 text-amber-900'
+                                : 'bg-slate-200 text-slate-700'
+                            }`}>
+                              {ticket.verifiedBy === 'volunteer' ? 'Gate Staff (PIN)' : 'Host Scanner'}
+                            </span>
                           </p>
                         </div>
                       </div>
@@ -693,6 +917,26 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                     }`}>
                       {evt.status.toUpperCase()}
                     </span>
+                    {evt.gatePin && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(evt.gatePin || '');
+                          setCopiedPinEventId(evt.eventId);
+                          setTimeout(() => setCopiedPinEventId(null), 2000);
+                        }}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-200 text-[10px] font-mono font-bold hover:bg-amber-100 transition cursor-pointer"
+                        title="Click to copy 6-digit volunteer gate passcode"
+                      >
+                        <KeyRound className="w-3 h-3 text-amber-600" />
+                        <span>Gate PIN: {evt.gatePin}</span>
+                        {copiedPinEventId === evt.eventId ? (
+                          <Check className="w-3 h-3 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-2.5 h-2.5 text-amber-600" />
+                        )}
+                      </button>
+                    )}
                   </div>
                   <h4 className="text-sm font-black text-slate-900 truncate">{evt.title}</h4>
                   <p className="text-xs text-slate-500 mt-0.5">
@@ -703,6 +947,40 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
 
               {/* Action Buttons */}
               <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto justify-start sm:justify-end border-t sm:border-t-0 border-slate-100 pt-2.5 sm:pt-0">
+                {/* Volunteer Gate Access: Code & Link */}
+                {evt.gatePin && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setQrModalEvent(evt)}
+                      className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
+                      title="View 6-Digit Gate Code & Direct Scanner Link to send to volunteers"
+                    >
+                      <KeyRound className="w-3.5 h-3.5 stroke-[2.4]" />
+                      <span>Volunteer Code & Link</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleShareWhatsApp(evt)}
+                      className="p-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                      title="Send directly to WhatsApp volunteer group"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>WhatsApp</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setQrModalEvent(evt)}
+                      className="p-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 text-xs font-bold flex items-center gap-1 transition cursor-pointer"
+                      title="Show QR Code on screen for volunteers to scan"
+                    >
+                      <QrCode className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Show QR</span>
+                    </button>
+                  </>
+                )}
                 {/* USER MANDATE: Only the host who created the event can edit it */}
                 {(evt.hostId === currentUser?.uid) ? (
                   <button
@@ -995,6 +1273,16 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
         hostCollege={currentUser?.college}
       />
 
+
+      {/* Volunteer Gate QR & Passcode Share Modal */}
+      {qrModalEvent && (
+        <VolunteerGateShareModal
+          event={qrModalEvent}
+          isOpen={!!qrModalEvent}
+          onClose={() => setQrModalEvent(null)}
+          onOpenVolunteerScanner={onOpenVolunteerScanner}
+        />
+      )}
 
       {/* Confirmation Modal: Cancel Event */}
       {eventToCancel && (
