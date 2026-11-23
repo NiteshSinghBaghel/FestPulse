@@ -1,18 +1,12 @@
 package com.campuspass.app.model
 
-import androidx.annotation.Keep
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.DocumentId
-import com.google.firebase.firestore.IgnoreExtraProperties
-import com.google.firebase.firestore.ServerTimestamp
-
 enum class UserRole(val key: String, val displayLabel: String) {
     USER("user", "Student"),
     HOST("host", "Event Organizer");
 
     companion object {
         fun fromKey(raw: String?): UserRole =
-            entries.firstOrNull { it.key == raw } ?: USER
+            entries.firstOrNull { it.key.equals(raw, ignoreCase = true) } ?: USER
     }
 }
 
@@ -33,10 +27,8 @@ enum class EventCategory(val label: String) {
     }
 }
 
-@Keep
-@IgnoreExtraProperties
 data class UserProfile(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val name: String = "",
     val email: String = "",
@@ -44,17 +36,15 @@ data class UserProfile(
     val college: String = "",
     val phone: String = "",
     val photoUrl: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAtMs: Long = 0L,
+    val updatedAtMs: Long = 0L
 ) {
     val activeRole: UserRole
         get() = UserRole.fromKey(role)
 }
 
-@Keep
-@IgnoreExtraProperties
 data class CollegeEvent(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val hostId: String = "",
     val hostName: String = "",
     val title: String = "",
@@ -72,8 +62,8 @@ data class CollegeEvent(
     val status: String = "published",
     val category: String = "Tech",
     val gatePin: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAtMs: Long = 0L,
+    val updatedAtMs: Long = 0L
 ) {
     val percentBooked: Int
         get() = if (capacity > 0L) ((ticketsSold * 100L) / capacity).toInt().coerceIn(0, 100) else 0
@@ -87,10 +77,8 @@ data class CollegeEvent(
     fun buildVolunteerDeepLink(): String = "campuspass://gate?gatePin=$gatePin"
 }
 
-@Keep
-@IgnoreExtraProperties
 data class Ticket(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val eventId: String = "",
     val eventTitle: String = "",
     val eventDate: String = "",
@@ -112,8 +100,8 @@ data class Ticket(
     val entryTimestampMs: Long = 0L,
     val verifiedBy: String = "",
     val volunteerPin: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAtMs: Long = 0L,
+    val updatedAtMs: Long = 0L
 ) {
     val enteredFlag: Boolean
         get() = entryStatus == "entered"
@@ -126,10 +114,8 @@ data class Ticket(
             .joinToString("|")
 }
 
-@Keep
-@IgnoreExtraProperties
 data class PayoutRecord(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val hostId: String = "",
     val hostName: String = "",
     val amount: Long = 0L,
@@ -138,8 +124,8 @@ data class PayoutRecord(
     val accountHolderName: String = "",
     val status: String = "completed",
     val referenceId: String = "",
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAtMs: Long = 0L,
+    val updatedAtMs: Long = 0L
 )
 
 data class HostRevenueSummary(

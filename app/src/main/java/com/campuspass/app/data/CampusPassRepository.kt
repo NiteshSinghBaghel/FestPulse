@@ -12,6 +12,7 @@ import com.campuspass.app.model.UserProfile
 import com.campuspass.app.model.UserRole
 import com.campuspass.app.util.QrCodeUtils
 import com.google.firebase.Firebase
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -30,6 +31,7 @@ import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 
 class CampusPassRepository(private val db: FirebaseFirestore) {
@@ -68,9 +70,7 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
             db.collection("users").document(uid)
                 .snapshots()
                 .map { snap ->
-                    if (snap.exists()) {
-                        snap.toObject(UserProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                    } else null
+                    if (snap.exists()) snap.toUserProfileSafely() else null
                 }
                 .catch { error ->
                     unwrapAndHandle(error, OperationType.GET, path, uid)
@@ -90,8 +90,8 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
                 .whereIn("status", listOf("published", "sold_out"))
                 .snapshots()
                 .map { snap ->
-                    snap.toObjects(CollegeEvent::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                        .sortedByDescending { it.createdAt?.seconds ?: 0L }
+                    snap.documents.mapNotNull { it.toCollegeEventSafelyOrNull() }
+                        .sortedByDescending { it.createdAtMs }
                 }
                 .catch { error ->
                     unwrapAndHandle(error, OperationType.LIST, path, uid)
@@ -111,8 +111,8 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
                 .whereEqualTo("hostId", hostId)
                 .snapshots()
                 .map { snap ->
-                    snap.toObjects(CollegeEvent::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                        .sortedByDescending { it.createdAt?.seconds ?: 0L }
+                    snap.documents.mapNotNull { it.toCollegeEventSafelyOrNull() }
+                        .sortedByDescending { it.createdAtMs }
                 }
                 .catch { error ->
                     unwrapAndHandle(error, OperationType.LIST, path, hostId)
@@ -132,8 +132,8 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
                 .whereEqualTo("userId", userId)
                 .snapshots()
                 .map { snap ->
-                    snap.toObjects(Ticket::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                        .sortedByDescending { it.createdAt?.seconds ?: 0L }
+                    snap.documents.mapNotNull { it.toTicketSafelyOrNull() }
+                        .sortedByDescending { it.createdAtMs }
                 }
                 .catch { error ->
                     unwrapAndHandle(error, OperationType.LIST, path, userId)
@@ -154,10 +154,10 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
                 .snapshots()
                 .map { snap ->
                     // Strictly newest check-in at top, then newest issued
-                    snap.toObjects(Ticket::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+                    snap.documents.mapNotNull { it.toTicketSafelyOrNull() }
                         .sortedWith(
                             compareByDescending<Ticket> { it.entryTimestampMs }
-                                .thenByDescending { it.createdAt?.seconds ?: 0L }
+                                .thenByDescending { it.createdAtMs }
                         )
                 }
                 .catch { error ->
@@ -178,8 +178,8 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
                 .whereEqualTo("hostId", hostId)
                 .snapshots()
                 .map { snap ->
-                    snap.toObjects(PayoutRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                        .sortedByDescending { it.createdAt?.seconds ?: 0L }
+                    snap.documents.mapNotNull { it.toPayoutRecordSafelyOrNull() }
+                        .sortedByDescending { it.createdAtMs }
                 }
                 .catch { error ->
                     unwrapAndHandle(error, OperationType.LIST, path, hostId)
@@ -212,14 +212,12 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
             val docRef = db.collection("users").document(uid)
             val existingSnap = docRef.get().await()
             if (existingSnap.exists()) {
-                val existing = existingSnap.toObject(UserProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                if (existing != null) {
-                    return Result.success(existing)
-                }
+                return Result.success(existingSnap.toUserProfileSafely())
             }
             val displayName = (user.displayName ?: user.email?.substringBefore("@") ?: "Campus User").take(80)
             val email = (user.email ?: "$uid@campuspass.app").take(120)
             val photoUrl = (user.photoUrl?.toString() ?: "").take(500)
+            val nowMs = System.currentTimeMillis()
             val payload = mapOf(
                 "userId" to uid,
                 "name" to displayName,
@@ -241,7 +239,9 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
                     role = preferredRole.key,
                     college = college.trim(),
                     phone = phone.trim(),
-                    photoUrl = photoUrl
+                    photoUrl = photoUrl,
+                    createdAtMs = nowMs,
+                    updatedAtMs = nowMs
                 )
             )
         } catch (e: CancellationException) {
@@ -309,6 +309,7 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
             docPath = docRef.path
             val gatePin = QrCodeUtils.generateSixDigitPin()
             val safeImage = imageUrl.trim().ifBlank { defaultCoverForCategory(category) }.take(500)
+            val nowMs = System.currentTimeMillis()
 
             val payload = mapOf(
                 "hostId" to uid,
@@ -351,7 +352,9 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
                     availableTickets = capacity,
                     status = "published",
                     category = payload["category"] as String,
-                    gatePin = gatePin
+                    gatePin = gatePin,
+                    createdAtMs = nowMs,
+                    updatedAtMs = nowMs
                 )
             )
         } catch (e: CancellationException) {
@@ -424,6 +427,7 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
             val newSold = event.ticketsSold + 1L
             val newAvail = (event.availableTickets - 1L).coerceAtLeast(0L)
             val newStatus = if (newAvail == 0L) "sold_out" else "published"
+            val nowMs = System.currentTimeMillis()
 
             val ticketPayload = mapOf(
                 "eventId" to event.id,
@@ -479,7 +483,9 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
                     status = "confirmed",
                     qrToken = qrToken,
                     qrHash = qrHash,
-                    entryStatus = "not_entered"
+                    entryStatus = "not_entered",
+                    createdAtMs = nowMs,
+                    updatedAtMs = nowMs
                 )
             )
         } catch (e: CancellationException) {
@@ -551,7 +557,6 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
         }
 
         if (matchingTicket == null) {
-            // Check if this ticket belongs to another organizer!
             return if (parsed.eventId != null && parsed.qrToken.startsWith("CP-PASS-")) {
                 ScanResult(
                     success = false,
@@ -654,7 +659,7 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
                 .limit(1)
                 .get()
                 .await()
-            val evt = snap.toObjects(CollegeEvent::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+            val evt = snap.documents.mapNotNull { it.toCollegeEventSafelyOrNull() }
                 .firstOrNull()
                 ?: return Result.failure(IllegalArgumentException("Invalid Gate PIN or event is cancelled."))
             Result.success(evt)
@@ -763,6 +768,7 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
             val refId = "UTR${(100000000..999999999).random()}"
             val docRef = db.collection("payouts").document(payoutId)
             docPath = docRef.path
+            val nowMs = System.currentTimeMillis()
 
             val payload = mapOf(
                 "hostId" to uid,
@@ -787,7 +793,9 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
                     destination = payload["destination"] as String,
                     accountHolderName = payload["accountHolderName"] as String,
                     status = "completed",
-                    referenceId = refId
+                    referenceId = refId,
+                    createdAtMs = nowMs,
+                    updatedAtMs = nowMs
                 )
             )
         } catch (e: CancellationException) {
@@ -827,5 +835,173 @@ class CampusPassRepository(private val db: FirebaseFirestore) {
         "sports" -> "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?w=1000&auto=format&fit=crop&q=80"
         "gaming" -> "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=1000&auto=format&fit=crop&q=80"
         else -> "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1000&auto=format&fit=crop&q=80"
+    }
+}
+
+// ============================================================================
+// Defensive Firestore Snapshot Mappers (Handles Timestamp, ISO-8601 String, & Number)
+// ============================================================================
+
+private fun DocumentSnapshot.readString(vararg keys: String, defaultValue: String = ""): String {
+    for (key in keys) {
+        val raw = get(key, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        when (raw) {
+            is String -> if (raw.isNotEmpty()) return raw
+            is Number -> return raw.toString()
+        }
+    }
+    return defaultValue
+}
+
+private fun DocumentSnapshot.readLong(vararg keys: String, defaultValue: Long = 0L): Long {
+    for (key in keys) {
+        val raw = get(key, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        when (raw) {
+            is Number -> return raw.toLong()
+            is String -> raw.toLongOrNull()?.let { return it }
+        }
+    }
+    return defaultValue
+}
+
+private fun DocumentSnapshot.readEpochMillis(vararg keys: String): Long {
+    for (key in keys) {
+        val raw = get(key, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
+        when (raw) {
+            is Timestamp -> return raw.toDate().time
+            is Date -> return raw.time
+            is Number -> return raw.toLong()
+            is String -> parseIsoEpochMillis(raw)?.let { return it }
+        }
+    }
+    return 0L
+}
+
+private fun parseIsoEpochMillis(raw: String): Long? {
+    val clean = raw.trim()
+    if (clean.isEmpty()) return null
+    clean.toLongOrNull()?.let { return it }
+    val normalized = clean
+        .replace(Regex("\\.\\d+Z$"), "Z")
+        .replace(Regex("([+-]\\d{2}):(\\d{2})$"), "$1$2")
+    val patterns = listOf(
+        "yyyy-MM-dd'T'HH:mm:ss'Z'",
+        "yyyy-MM-dd'T'HH:mm:ssZ",
+        "yyyy-MM-dd'T'HH:mm:ss",
+        "yyyy-MM-dd"
+    )
+    for (pattern in patterns) {
+        try {
+            val sdf = SimpleDateFormat(pattern, Locale.US).apply {
+                timeZone = TimeZone.getTimeZone("UTC")
+            }
+            sdf.parse(normalized)?.time?.let { return it }
+        } catch (_: Exception) {
+            // Try next format
+        }
+    }
+    return null
+}
+
+private fun DocumentSnapshot.toUserProfileSafely(): UserProfile {
+    return UserProfile(
+        id = id,
+        userId = readString("userId", "uid", defaultValue = id),
+        name = readString("name", defaultValue = "Campus Member"),
+        email = readString("email"),
+        role = readString("role", defaultValue = "user"),
+        college = readString("college"),
+        phone = readString("phone"),
+        photoUrl = readString("photoUrl", "photoURL"),
+        createdAtMs = readEpochMillis("createdAt"),
+        updatedAtMs = readEpochMillis("updatedAt")
+    )
+}
+
+private fun DocumentSnapshot.toCollegeEventSafelyOrNull(): CollegeEvent? {
+    return try {
+        val capacityVal = readLong("capacity", defaultValue = 100L).coerceAtLeast(1L)
+        val soldVal = readLong("ticketsSold", defaultValue = 0L).coerceAtLeast(0L)
+        val availVal = readLong("availableTickets", defaultValue = (capacityVal - soldVal).coerceAtLeast(0L))
+        CollegeEvent(
+            id = id,
+            hostId = readString("hostId"),
+            hostName = readString("hostName", defaultValue = "Campus Organizer"),
+            title = readString("title", defaultValue = "Campus Event"),
+            description = readString("description"),
+            imageUrl = readString("imageUrl"),
+            date = readString("date"),
+            startTime = readString("startTime"),
+            endTime = readString("endTime"),
+            location = readString("location"),
+            venue = readString("venue"),
+            price = readLong("price", defaultValue = 0L),
+            capacity = capacityVal,
+            ticketsSold = soldVal,
+            availableTickets = availVal,
+            status = readString("status", defaultValue = "published"),
+            category = readString("category", defaultValue = "Tech"),
+            gatePin = readString("gatePin"),
+            createdAtMs = readEpochMillis("createdAt"),
+            updatedAtMs = readEpochMillis("updatedAt")
+        )
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun DocumentSnapshot.toTicketSafelyOrNull(): Ticket? {
+    return try {
+        val entryMs = readLong("entryTimestampMs", defaultValue = 0L)
+            .takeIf { it > 0L }
+            ?: readEpochMillis("entryTimestamp")
+        Ticket(
+            id = id,
+            eventId = readString("eventId"),
+            eventTitle = readString("eventTitle", defaultValue = "Campus Event"),
+            eventDate = readString("eventDate"),
+            eventTime = readString("eventTime"),
+            eventVenue = readString("eventVenue"),
+            eventImageUrl = readString("eventImageUrl"),
+            userId = readString("userId"),
+            userName = readString("userName", defaultValue = "Attendee"),
+            userEmail = readString("userEmail"),
+            college = readString("college"),
+            rollNo = readString("rollNo"),
+            hostId = readString("hostId"),
+            amount = readLong("amount", defaultValue = 0L),
+            status = readString("status", defaultValue = "confirmed"),
+            qrToken = readString("qrToken"),
+            qrHash = readString("qrHash"),
+            entryStatus = readString("entryStatus", defaultValue = "not_entered"),
+            entryTime = readString("entryTime"),
+            entryTimestampMs = entryMs,
+            verifiedBy = readString("verifiedBy"),
+            volunteerPin = readString("volunteerPin"),
+            createdAtMs = readEpochMillis("createdAt", "issuedAt"),
+            updatedAtMs = readEpochMillis("updatedAt")
+        )
+    } catch (_: Exception) {
+        null
+    }
+}
+
+private fun DocumentSnapshot.toPayoutRecordSafelyOrNull(): PayoutRecord? {
+    return try {
+        PayoutRecord(
+            id = id,
+            hostId = readString("hostId"),
+            hostName = readString("hostName"),
+            amount = readLong("amount", defaultValue = 0L),
+            method = readString("method", defaultValue = "UPI"),
+            destination = readString("destination"),
+            accountHolderName = readString("accountHolderName"),
+            status = readString("status", defaultValue = "completed"),
+            referenceId = readString("referenceId"),
+            createdAtMs = readEpochMillis("createdAt", "timestamp"),
+            updatedAtMs = readEpochMillis("updatedAt", "timestamp")
+        )
+    } catch (_: Exception) {
+        null
     }
 }

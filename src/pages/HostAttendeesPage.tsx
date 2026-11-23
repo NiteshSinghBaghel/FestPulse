@@ -65,18 +65,19 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
   }, []);
 
   const organizerId = currentUser?.uid || '';
+  const organizerEmail = currentUser?.email || '';
 
-  // Filter events strictly by the current user's organizer ID
+  // Filter events strictly by the current user's organizer ID or email
   const hostEvents: CollegeEvent[] = useMemo(() => {
-    if (!organizerId) return [];
-    return StorageService.getHostEvents(organizerId);
-  }, [allEvents, organizerId]);
+    if (!organizerId && !organizerEmail) return [];
+    return StorageService.getHostEvents(organizerId, organizerEmail);
+  }, [allEvents, organizerId, organizerEmail]);
 
   // Host tickets strictly belonging to this host's events
   const hostTickets: Ticket[] = useMemo(() => {
-    if (!organizerId) return [];
-    return StorageService.getHostTickets(organizerId);
-  }, [allTickets, organizerId]);
+    if (!organizerId && !organizerEmail) return [];
+    return StorageService.getHostTickets(organizerId, organizerEmail);
+  }, [allTickets, organizerId, organizerEmail]);
 
   // Active event object if a specific event is selected
   const activeEvent = selectedEventId !== 'ALL'

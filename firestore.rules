@@ -23,16 +23,21 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isValidCreatedAtValue(val) {
+      return (val is timestamp && val <= request.time) ||
+             (val is string && val.size() >= 10 && val.size() <= 40);
+    }
+
     function isValidUserProfile(data) {
-      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+      return (data.userId is string || data.uid is string) &&
              data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
              data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
              data.role in ['user', 'host'] &&
              (!('college' in data) || (data.college is string && data.college.size() <= 120)) &&
              (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
              (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+             (!('createdAt' in data) || isValidCreatedAtValue(data.createdAt)) &&
+             (!('updatedAt' in data) || isValidCreatedAtValue(data.updatedAt));
     }
 
     function isValidEvent(data) {
@@ -53,7 +58,7 @@ service cloud.firestore {
              data.status in ['published', 'sold_out', 'cancelled'] &&
              data.category in ['Tech', 'Cultural', 'Sports', 'Hackathon', 'Workshop', 'Music', 'Gaming'] &&
              data.gatePin is string && data.gatePin.size() == 6 && data.gatePin.matches('^[0-9]{6}$') &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
+             isValidCreatedAtValue(data.createdAt) &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
@@ -79,7 +84,7 @@ service cloud.firestore {
              (!('entryTimestampMs' in data) || (data.entryTimestampMs is int && data.entryTimestampMs >= 0)) &&
              (!('verifiedBy' in data) || data.verifiedBy in ['organizer', 'volunteer']) &&
              (!('volunteerPin' in data) || (data.volunteerPin is string && data.volunteerPin.size() == 6 && data.volunteerPin.matches('^[0-9]{6}$'))) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
+             (!('createdAt' in data) || isValidCreatedAtValue(data.createdAt)) &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
@@ -136,6 +141,7 @@ service cloud.firestore {
                        incoming().status == 'published' &&
                        incoming().keys().hasAll(['hostId', 'hostName', 'title', 'description', 'imageUrl', 'date', 'startTime', 'endTime', 'location', 'venue', 'price', 'capacity', 'ticketsSold', 'availableTickets', 'status', 'category', 'gatePin', 'createdAt', 'updatedAt']) &&
                        incoming().keys().hasOnly(['hostId', 'hostName', 'title', 'description', 'imageUrl', 'date', 'startTime', 'endTime', 'location', 'venue', 'price', 'capacity', 'ticketsSold', 'availableTickets', 'status', 'category', 'gatePin', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp &&
                        isValidEvent(incoming());
 
       allow update: if isSignedIn() &&
@@ -178,6 +184,7 @@ service cloud.firestore {
                        incoming().entryStatus == 'not_entered' &&
                        incoming().keys().hasAll(['eventId', 'eventTitle', 'eventDate', 'eventTime', 'eventVenue', 'eventImageUrl', 'userId', 'userName', 'userEmail', 'hostId', 'amount', 'status', 'qrToken', 'qrHash', 'entryStatus', 'createdAt', 'updatedAt']) &&
                        incoming().keys().hasOnly(['eventId', 'eventTitle', 'eventDate', 'eventTime', 'eventVenue', 'eventImageUrl', 'userId', 'userName', 'userEmail', 'college', 'rollNo', 'hostId', 'amount', 'status', 'qrToken', 'qrHash', 'entryStatus', 'entryTime', 'entryTimestampMs', 'verifiedBy', 'volunteerPin', 'createdAt', 'updatedAt']) &&
+                       incoming().createdAt is timestamp &&
                        isValidTicket(incoming()) &&
                        exists(/databases/$(database)/documents/events/$(incoming().eventId)) &&
                        get(/databases/$(database)/documents/events/$(incoming().eventId)).data.hostId == incoming().hostId &&

@@ -119,20 +119,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, onOpenVolunte
             <FestLogo size="md" variant="dark" subtitleText="🎓 Inter-College Event Network" />
           </div>
 
-          {/* Right: Volunteer Gate Passcode Mode & Login */}
+          {/* Right: Login Dropdown */}
           <div className="flex items-center gap-2 shrink-0">
-            {/* Direct Volunteer Gate Passcode Button */}
-            <button
-              type="button"
-              onClick={() => onOpenVolunteerScanner && onOpenVolunteerScanner()}
-              className="py-1.5 px-3 rounded-full text-xs font-bold bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
-              title="Gate Volunteer Passcode Scanner (No password required)"
-            >
-              <KeyRound className="w-3.5 h-3.5 text-amber-700" />
-              <span className="hidden sm:inline">Gate Volunteer PIN</span>
-              <span className="sm:hidden">Gate PIN</span>
-            </button>
-
             {/* Top-Right Login Dropdown */}
             <div 
               className="relative shrink-0 flex flex-col items-end"

@@ -139,7 +139,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
                   Gate Code: <span className="font-mono text-amber-950 tracking-widest">{event.gatePin}</span>
                 </p>
                 <p className="text-xs text-slate-600 font-medium">
-                  Click below to get the 6-digit code, direct scanner link, WhatsApp invite, or QR to send to your door volunteers.
+                  Copy the 6-digit Gate PIN or direct scanner link to share with your gate volunteers.
                 </p>
               </div>
             </div>
