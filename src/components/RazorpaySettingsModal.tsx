@@ -32,6 +32,10 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
   const [keySecret, setKeySecret] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
   const [webhookSecret, setWebhookSecret] = useState('');
+  const [hasExistingSecret, setHasExistingSecret] = useState(false);
+  const [hasValidPayoutAccount, setHasValidPayoutAccount] = useState(false);
+  const [webhookConfigured, setWebhookConfigured] = useState(false);
+  const [configSource, setConfigSource] = useState<string>('env');
   const [showSecret, setShowSecret] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -59,13 +63,16 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
     setTestResult(null);
     setSaveSuccess(null);
     setSaveError(null);
+    setKeySecret('');
+    setWebhookSecret('');
     try {
       const cfg = await PaymentService.getRazorpayGatewayConfig();
       setKeyId(cfg.keyId || '');
-      // If server provides masked account number, show placeholder
-      if (cfg.accountNumber) {
-        setAccountNumber(cfg.accountNumber);
-      }
+      setHasExistingSecret(Boolean(cfg.hasSecret));
+      setHasValidPayoutAccount(Boolean(cfg.hasValidPayoutAccount));
+      setWebhookConfigured(Boolean(cfg.webhookConfigured));
+      setConfigSource(cfg.source || 'env');
+      setAccountNumber(cfg.accountNumber || '');
     } catch (e) {
       console.warn('Could not load razorpay config:', e);
     } finally {
@@ -122,6 +129,16 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
       return;
     }
 
+    if (!keySecret.trim() && !hasExistingSecret) {
+      setSaveError('Razorpay Key Secret is required.');
+      return;
+    }
+
+    if (accountNumber.trim().startsWith('rzp_')) {
+      setSaveError('RazorpayX Account Number must be a numeric Virtual/Current Account ID, not an rzp_ Key ID.');
+      return;
+    }
+
     setIsSaving(true);
 
     try {
@@ -133,11 +150,12 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
       });
 
       if (res.success) {
-        setSaveSuccess('Saved successfully');
+        setSaveSuccess(res.message || 'Gateway credentials updated and activated.');
+        await loadCurrentConfig();
         if (onConfigSaved) onConfigSaved();
         setTimeout(() => {
           onClose();
-        }, 1800);
+        }, 1500);
       } else {
         setSaveError(res.error || 'Failed to save Razorpay configuration.');
       }
@@ -239,7 +257,12 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
               <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                 <Lock className="w-3.5 h-3.5 text-indigo-600" />
                 <span>Razorpay Key Secret</span>
-                <span className="text-rose-500">*</span>
+                {!hasExistingSecret && <span className="text-rose-500">*</span>}
+                {hasExistingSecret && (
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                    Stored on server ({configSource === 'env' ? 'Secrets/.env' : 'Settings'})
+                  </span>
+                )}
               </label>
               <button
                 type="button"
@@ -253,33 +276,66 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
             <div className="relative">
               <input
                 type={showSecret ? 'text' : 'password'}
-                placeholder="Enter your secret key"
+                placeholder={hasExistingSecret ? 'Leave blank to keep existing server secret' : 'Enter your Razorpay Key Secret'}
                 value={keySecret}
                 onChange={(e) => setKeySecret(e.target.value)}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 text-xs font-mono focus:outline-none focus:border-indigo-500 focus:bg-white transition"
               />
             </div>
             <p className="text-[10px] text-slate-400 mt-1">
-              Required for HMAC SHA-256 signature verification and authentic order generation.
+              Stays strictly on the server for order creation, HMAC SHA-256 verification, and capture checks.
             </p>
           </div>
 
           {/* RazorpayX Account Number (Settlements) */}
           <div>
-            <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-1">
-              <Building2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>RazorpayX Account Number (Optional for Payouts)</span>
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Building2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span>RazorpayX Account Number (For Automated Payouts)</span>
+              </label>
+              {hasValidPayoutAccount ? (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                  Payouts Ready
+                </span>
+              ) : (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-bold">
+                  Not Set
+                </span>
+              )}
+            </div>
             <input
               type="text"
-              placeholder="e.g. 7878780080316316"
+              placeholder="Numeric RazorpayX Virtual/Current Account ID"
               value={accountNumber}
               onChange={(e) => setAccountNumber(e.target.value)}
               className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 text-xs font-mono focus:outline-none focus:border-indigo-500 focus:bg-white transition"
             />
             <p className="text-[10px] text-slate-400 mt-1">
-              Used for automated RazorpayX IMPS & UPI payouts to organizers. Leave blank to use automated settlement ledger.
+              Required only for automated RazorpayX IMPS/UPI payouts from this dashboard. Ticket payments settle automatically to your Razorpay merchant bank account even if blank.
             </p>
+          </div>
+
+          {/* Webhook Secret (Optional) */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Razorpay Webhook Secret (Optional)</span>
+              </label>
+              {webhookConfigured && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                  Configured
+                </span>
+              )}
+            </div>
+            <input
+              type="password"
+              placeholder={webhookConfigured ? 'Leave blank to keep existing webhook secret' : 'Enter Razorpay Webhook Secret'}
+              value={webhookSecret}
+              onChange={(e) => setWebhookSecret(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 text-xs font-mono focus:outline-none focus:border-indigo-500 focus:bg-white transition"
+            />
           </div>
 
           {/* Test Connection Button & Indicator */}
@@ -328,17 +384,16 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
             )}
           </div>
 
-          {/* Feature Highlights Grid */}
+          {/* Gateway Architecture Highlights */}
           <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-[11px] space-y-2 text-slate-600">
             <div className="font-bold text-slate-800 flex items-center gap-1.5">
               <Info className="w-3.5 h-3.5 text-indigo-600" />
-              <span>Industrial Payment Highlights:</span>
+              <span>Live Payment Security & Flow:</span>
             </div>
             <ul className="list-disc pl-4 space-y-1 text-slate-500">
-              <li><strong>Student Pass Checkout:</strong> Razorpay Standard modal with UPI (GPay, PhonePe, Paytm, BHIM), NetBanking, Credit/Debit cards & Wallets.</li>
-              <li><strong>HMAC SHA-256 Verification:</strong> Server-side cryptographic tampering protection for every payment.</li>
-              <li><strong>Host Revenue Settlements:</strong> Instant direct settlement to host's registered UPI VPA or Bank Account via IMPS.</li>
-              <li><strong>Automatic Fallback:</strong> If no live keys are configured yet, the app runs smoothly in Sandbox mode for testing.</li>
+              <li><strong>Student Pass Checkout:</strong> Razorpay Standard Checkout with real server-created orders (UPI, Cards, NetBanking & Wallets).</li>
+              <li><strong>Server Verification First:</strong> Passes are issued only after HMAC SHA-256 signature validation and Razorpay payment capture confirmation.</li>
+              <li><strong>Host Settlements:</strong> Ticket revenue settles directly via Razorpay, or through RazorpayX IMPS/UPI when a RazorpayX Account Number is configured.</li>
             </ul>
           </div>
 

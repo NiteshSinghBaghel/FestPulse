@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import QRCode from 'qrcode';
 import { CollegeEvent, Ticket } from '../types';
-import { PaymentService } from '../services/paymentService';
+import { PaymentService, RazorpayGatewayConfigStatus } from '../services/paymentService';
 import { useAuth } from '../context/AuthContext';
 import { 
   X, 
@@ -18,11 +18,7 @@ import {
   GraduationCap,
   Hash,
   Lock,
-  Download,
-  Calendar,
-  MapPin,
-  RefreshCw,
-  Zap
+  RefreshCw
 } from 'lucide-react';
 
 interface PaymentModalProps {
@@ -48,13 +44,22 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
   // Form validation errors
   const [formErrors, setFormErrors] = useState<{ [key: string]: string }>({});
 
-  // Payment State
+  // Payment & Gateway State
   const [step, setStep] = useState<StepType>('form');
   const [errorMessage, setErrorMessage] = useState('');
   const [generatedTicket, setGeneratedTicket] = useState<Ticket | null>(null);
+  const [gatewayConfig, setGatewayConfig] = useState<RazorpayGatewayConfigStatus | null>(null);
 
   // Canvas for dynamic Pass QR rendering on success
   const ticketQrCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    if (isOpen && event.price > 0) {
+      PaymentService.getRazorpayGatewayConfig()
+        .then((cfg) => setGatewayConfig(cfg))
+        .catch(() => setGatewayConfig(null));
+    }
+  }, [isOpen, event.price]);
 
   // Render Pass QR on Success Screen
   useEffect(() => {
@@ -131,7 +136,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
       setStep('verifying');
       setErrorMessage('');
 
-      const order = await PaymentService.createPaymentOrder(event.eventId);
+      const order = await PaymentService.createPaymentOrder(event.eventId, {
+        quantity: ticketQuantity,
+      });
       const freePaymentId = `free_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
       const verification = await PaymentService.verifyPayment({
@@ -146,7 +153,6 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
         rollNo: rollNo.trim(),
         quantity: ticketQuantity,
         upiVpa: 'FREE_EVENT',
-        signatureChallenge: order.signatureChallenge
       });
 
       if (verification.success && verification.ticket) {
@@ -187,7 +193,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
       setStep('processing');
       setErrorMessage('');
 
-      // Step 1: Validate stock atomically and generate live Razorpay order
+      // Step 1: Validate stock atomically and create live Razorpay order on server
       const order = await PaymentService.createPaymentOrder(event.eventId, {
         amountInRupees: totalAmount,
         studentName: fullName.trim(),
@@ -196,9 +202,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
         quantity: ticketQuantity,
       });
 
-      // Step 2: Directly open the Razorpay Standard Live Payment Gateway
+      // Step 2: Open Razorpay Standard Checkout with server order_id & public key_id
       await PaymentService.openRazorpayCheckout({
-        amountInRupees: totalAmount,
+        amountInRupees: order.amount,
         eventName: event.title,
         eventId: event.eventId,
         studentName: fullName.trim(),
@@ -206,13 +212,14 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
         studentPhone: phone.trim(),
         quantity: ticketQuantity,
         orderId: order.orderId,
-        onSuccess: async (paymentId: string, orderId?: string, signature?: string) => {
+        keyId: order.keyId,
+        onSuccess: async (paymentId: string, orderId: string, signature: string) => {
           try {
-            // Step 3: Payment received and confirmed by gateway -> generate pass immediately!
+            // Step 3: Verify Razorpay HMAC signature & capture on server BEFORE issuing pass
             setStep('verifying');
             const verification = await PaymentService.verifyPayment({
               orderId: orderId || order.orderId,
-              paymentId: paymentId,
+              paymentId,
               eventId: event.eventId,
               userId: currentUser.uid,
               userName: fullName.trim(),
@@ -221,9 +228,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
               college: collegeName.trim(),
               rollNo: rollNo.trim(),
               quantity: ticketQuantity,
-              upiVpa: `${phone.replace(/\D/g, '')}@upi`,
-              signatureChallenge: order.signatureChallenge,
-              razorpaySignature: signature
+              upiVpa: 'razorpay@checkout',
+              razorpaySignature: signature,
             });
 
             if (verification.success && verification.ticket) {
@@ -303,8 +309,36 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
         {/* Modal Header */}
         <div className="p-5 sm:p-6 pb-4 shrink-0 border-b border-slate-100 bg-slate-50/70">
           <div className="pr-8">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-[10px] font-black uppercase tracking-wider mb-1.5">
-              <TicketIcon className="w-3 h-3" /> Event Pass Booking
+            <div className="flex flex-wrap items-center gap-2 mb-1.5">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-[10px] font-black uppercase tracking-wider">
+                <TicketIcon className="w-3 h-3" /> Event Pass Booking
+              </div>
+              {totalAmount > 0 && gatewayConfig && (
+                <span
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                    !gatewayConfig.isConfigured
+                      ? 'bg-rose-50 border-rose-200 text-rose-700'
+                      : gatewayConfig.isLive
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                      : 'bg-amber-50 border-amber-200 text-amber-700'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      !gatewayConfig.isConfigured
+                        ? 'bg-rose-500'
+                        : gatewayConfig.isLive
+                        ? 'bg-emerald-500 animate-pulse'
+                        : 'bg-amber-500'
+                    }`}
+                  />
+                  {!gatewayConfig.isConfigured
+                    ? 'Gateway Not Configured'
+                    : gatewayConfig.isLive
+                    ? 'Razorpay Live'
+                    : 'Razorpay Test'}
+                </span>
+              )}
             </div>
             <h2 className="text-xl sm:text-2xl font-black text-slate-900">
               {step === 'form' && 'Booking Details'}
@@ -370,6 +404,15 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
           <div className="flex-1 flex flex-col min-h-0">
             {/* Scrollable Form Fields */}
             <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 bg-white">
+              {totalAmount > 0 && gatewayConfig && !gatewayConfig.isConfigured && (
+                <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span>
+                    Razorpay merchant credentials are not configured on the server yet. Ask the organizer to add live or test keys in Gateway Settings or Secrets.
+                  </span>
+                </div>
+              )}
+
               {/* Event Badge Summary */}
               <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-100 flex items-center justify-between text-xs">
                 <div>

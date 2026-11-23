@@ -4,6 +4,8 @@ import { StorageService } from '../services/storageService';
 import { useAuth } from '../context/AuthContext';
 import { EditEventModal } from '../components/EditEventModal';
 import { HostPayoutModal } from '../components/HostPayoutModal';
+import { RazorpaySettingsModal } from '../components/RazorpaySettingsModal';
+import { PaymentService, RazorpayGatewayConfigStatus } from '../services/paymentService';
 import { PayoutInvoiceModal, downloadPayoutInvoice } from '../components/PayoutInvoiceModal';
 import { TicketSalesAnalyticsChart } from '../components/TicketSalesAnalyticsChart';
 import { VolunteerGateShareModal } from '../components/VolunteerGateShareModal';
@@ -77,13 +79,22 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
   const [editingEvent, setEditingEvent] = useState<CollegeEvent | null>(null);
   const [payoutsVersion, setPayoutsVersion] = useState<number>(0);
   const [isPayoutModalOpen, setIsPayoutModalOpen] = useState(false);
+  const [isGatewaySettingsOpen, setIsGatewaySettingsOpen] = useState(false);
+  const [gatewayConfig, setGatewayConfig] = useState<RazorpayGatewayConfigStatus | null>(null);
   const [selectedInvoicePayout, setSelectedInvoicePayout] = useState<PayoutRecord | null>(null);
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
   const [copiedPinEventId, setCopiedPinEventId] = useState<string | null>(null);
   const [qrModalEvent, setQrModalEvent] = useState<CollegeEvent | null>(null);
 
+  const refreshGatewayConfig = () => {
+    PaymentService.getRazorpayGatewayConfig()
+      .then((cfg) => setGatewayConfig(cfg))
+      .catch(() => setGatewayConfig(null));
+  };
+
   // Auto-listen to cloud database sync and storage changes
   useEffect(() => {
+    refreshGatewayConfig();
     const handleUpdate = () => {
       setPayoutsVersion((v) => v + 1);
     };
@@ -869,12 +880,29 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
             </div>
 
             <div className="pt-3 border-t border-white/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-xs text-emerald-100">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-emerald-100">
                 <ShieldCheck className="w-4 h-4 text-emerald-300 shrink-0" />
-                <span>Zero deduction payout • Instant 24x7 IMPS / UPI dispatch</span>
+                <span>
+                  {gatewayConfig?.isConfigured
+                    ? `${gatewayConfig.isLive ? 'Razorpay Live Production' : 'Razorpay Test Mode'} Active (${gatewayConfig.keyId})`
+                    : 'Razorpay Gateway Not Configured'}
+                </span>
+                {gatewayConfig?.isConfigured && !gatewayConfig.hasValidPayoutAccount && (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-400/20 border border-amber-300/40 text-amber-100 text-[10px] font-bold">
+                    RazorpayX Account Required for Automated Payouts
+                  </span>
+                )}
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsGatewaySettingsOpen(true)}
+                  className="py-3 px-4 rounded-2xl bg-white/15 hover:bg-white/25 text-white border border-white/25 font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <CreditCard className="w-4 h-4" />
+                  <span>Gateway Settings</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setIsPayoutModalOpen(true)}
@@ -1057,6 +1085,14 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
           setPayoutsVersion((v) => v + 1);
           onEventsUpdated();
         }}
+        onOpenGatewaySettings={() => setIsGatewaySettingsOpen(true)}
+      />
+
+      {/* Razorpay Live / Test Gateway Configuration Modal */}
+      <RazorpaySettingsModal
+        isOpen={isGatewaySettingsOpen}
+        onClose={() => setIsGatewaySettingsOpen(false)}
+        onConfigSaved={refreshGatewayConfig}
       />
 
       {/* Payout Settlement Invoice View & Download Modal */}

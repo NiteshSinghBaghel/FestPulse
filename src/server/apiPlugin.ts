@@ -12,12 +12,14 @@ function getEnvKey(key: string, defaultVal: string): string {
     if (fs.existsSync(envPath)) {
       const content = fs.readFileSync(envPath, 'utf8');
       const match = content.match(new RegExp(`^${key}=(.*)$`, 'm'));
-      if (match && match[1]?.trim()) {
-        return match[1].trim();
+      const raw = match?.[1]?.trim().replace(/^["']|["']$/g, '').trim();
+      if (raw) {
+        return raw;
       }
     }
   } catch {}
-  return process.env[key] || defaultVal;
+  const fromProc = (process.env[key] || '').trim().replace(/^["']|["']$/g, '').trim();
+  return fromProc || defaultVal;
 }
 
 function updateEnvKey(key: string, value: string): void {
@@ -36,11 +38,30 @@ function updateEnvKey(key: string, value: string): void {
   }
 }
 
+const LEGACY_DEMO_KEY_IDS = new Set([
+  'rzp_test_5Wj8tV4x6zK9aL',
+  'rzp_test_Tn2gGCmZM8sHv0',
+]);
+
+const LEGACY_DEMO_SECRETS = new Set([
+  'test_secret_key_123',
+  'nLuBuOx9Mu7NzmTCbAX8hLfP',
+]);
+
+function isLegacyDemoKeyId(val?: string): boolean {
+  return Boolean(val && LEGACY_DEMO_KEY_IDS.has(val.trim()));
+}
+
+function isLegacyDemoSecret(val?: string): boolean {
+  return Boolean(val && LEGACY_DEMO_SECRETS.has(val.trim()));
+}
+
 interface RazorpayConfigSchema {
   keyId: string;
   keySecret: string;
   accountNumber?: string;
   webhookSecret?: string;
+  updatedViaUi?: boolean;
 }
 
 interface DatabaseSchema {
@@ -59,13 +80,21 @@ interface DatabaseSchema {
   passwordResetTokens?: Record<string, { email: string; role: string; createdAt: string; expiresAt: number }>;
 }
 
-function loadDatabase(): DatabaseSchema {
-  const defaultRzpConfig: RazorpayConfigSchema = {
-    keyId: getEnvKey('VITE_RAZORPAY_KEY_ID', 'rzp_test_5Wj8tV4x6zK9aL'),
-    keySecret: getEnvKey('VITE_RAZORPAY_KEY_SECRET', 'test_secret_key_123'),
-    accountNumber: getEnvKey('RAZORPAY_ACCOUNT_NUMBER', ''),
-    webhookSecret: getEnvKey('RAZORPAY_WEBHOOK_SECRET', ''),
+function readEnvRazorpayConfig(): RazorpayConfigSchema {
+  const keyId = getEnvKey('RAZORPAY_KEY_ID', '') || getEnvKey('VITE_RAZORPAY_KEY_ID', '');
+  const keySecret = getEnvKey('RAZORPAY_KEY_SECRET', '') || getEnvKey('VITE_RAZORPAY_KEY_SECRET', '');
+  const rawAccount = getEnvKey('RAZORPAY_ACCOUNT_NUMBER', '');
+  const webhookSecret = getEnvKey('RAZORPAY_WEBHOOK_SECRET', '');
+  return {
+    keyId: isLegacyDemoKeyId(keyId) ? '' : keyId,
+    keySecret: isLegacyDemoSecret(keySecret) ? '' : keySecret,
+    accountNumber: rawAccount,
+    webhookSecret,
   };
+}
+
+function loadDatabase(): DatabaseSchema {
+  const defaultRzpConfig = readEnvRazorpayConfig();
 
   try {
     if (!fs.existsSync(DB_FILE_PATH)) {
@@ -89,15 +118,21 @@ function loadDatabase(): DatabaseSchema {
     }
     const raw = fs.readFileSync(DB_FILE_PATH, 'utf8');
     const parsed = JSON.parse(raw);
+    const storedRzp = parsed.razorpayConfig;
+    const useStored = Boolean(
+      storedRzp &&
+      storedRzp.updatedViaUi &&
+      storedRzp.keyId &&
+      !isLegacyDemoKeyId(storedRzp.keyId) &&
+      !isLegacyDemoSecret(storedRzp.keySecret)
+    );
     return {
       events: Array.isArray(parsed.events) ? parsed.events : [],
       tickets: Array.isArray(parsed.tickets) ? parsed.tickets : [],
       accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
       payouts: Array.isArray(parsed.payouts) ? parsed.payouts : [],
       payments: Array.isArray(parsed.payments) ? parsed.payments : [],
-      razorpayConfig: parsed.razorpayConfig && parsed.razorpayConfig.keyId
-        ? parsed.razorpayConfig
-        : defaultRzpConfig,
+      razorpayConfig: useStored ? storedRzp : defaultRzpConfig,
       flushedAt: typeof parsed.flushedAt === 'number' ? parsed.flushedAt : 0,
       supabaseConfig: parsed.supabaseConfig || { url: '', anonKey: '', enabled: false },
       passwordResetTokens: parsed.passwordResetTokens || {},
@@ -131,7 +166,7 @@ function saveDatabase(data: DatabaseSchema): boolean {
   }
 }
 
-async function parseBody(req: Connect.IncomingMessage): Promise<any> {
+async function parseRawBody(req: Connect.IncomingMessage): Promise<{ raw: string; json: any }> {
   return new Promise((resolve) => {
     let body = '';
     req.on('data', (chunk) => {
@@ -139,12 +174,17 @@ async function parseBody(req: Connect.IncomingMessage): Promise<any> {
     });
     req.on('end', () => {
       try {
-        resolve(body ? JSON.parse(body) : {});
+        resolve({ raw: body, json: body ? JSON.parse(body) : {} });
       } catch {
-        resolve({});
+        resolve({ raw: body, json: {} });
       }
     });
   });
+}
+
+async function parseBody(req: Connect.IncomingMessage): Promise<any> {
+  const { json } = await parseRawBody(req);
+  return json;
 }
 
 function sendJson(res: any, statusCode: number, data: any) {
@@ -1212,22 +1252,40 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           }
         }
 
-        // 8. Razorpay Industrial Live Integration Endpoints
-        // Helper to get active credentials
+        // 8. Razorpay Production Gateway Integration Endpoints
         const getActiveRzp = () => {
-          const cfg = db.razorpayConfig || {
-            keyId: getEnvKey('VITE_RAZORPAY_KEY_ID', 'rzp_test_5Wj8tV4x6zK9aL'),
-            keySecret: getEnvKey('VITE_RAZORPAY_KEY_SECRET', 'test_secret_key_123'),
-            accountNumber: getEnvKey('RAZORPAY_ACCOUNT_NUMBER', ''),
-            webhookSecret: getEnvKey('RAZORPAY_WEBHOOK_SECRET', ''),
-          };
-          const keyId = (cfg.keyId || '').trim();
-          const keySecret = (cfg.keySecret || '').trim();
-          const accountNumber = (cfg.accountNumber || '').trim();
-          const webhookSecret = (cfg.webhookSecret || '').trim();
+          const envCfg = readEnvRazorpayConfig();
+          const stored = db.razorpayConfig;
+          const useStored = Boolean(
+            stored &&
+            stored.updatedViaUi &&
+            stored.keyId &&
+            !isLegacyDemoKeyId(stored.keyId) &&
+            !isLegacyDemoSecret(stored.keySecret)
+          );
+          const keyId = ((useStored ? stored.keyId : envCfg.keyId) || envCfg.keyId || '').trim();
+          const keySecret = ((useStored ? stored.keySecret : envCfg.keySecret) || envCfg.keySecret || '').trim();
+          const accountNumber = ((useStored ? stored.accountNumber : envCfg.accountNumber) || envCfg.accountNumber || '').trim();
+          const webhookSecret = ((useStored ? stored.webhookSecret : envCfg.webhookSecret) || envCfg.webhookSecret || '').trim();
           const isLive = keyId.startsWith('rzp_live_');
-          const isConfigured = Boolean(keyId && keySecret);
-          return { keyId, keySecret, accountNumber, webhookSecret, isLive, isConfigured };
+          const isConfigured = Boolean(
+            keyId &&
+            keySecret &&
+            (keyId.startsWith('rzp_live_') || keyId.startsWith('rzp_test_')) &&
+            !isLegacyDemoKeyId(keyId) &&
+            !isLegacyDemoSecret(keySecret)
+          );
+          const hasValidPayoutAccount = Boolean(accountNumber && !accountNumber.startsWith('rzp_') && accountNumber.length >= 6);
+          return {
+            keyId,
+            keySecret,
+            accountNumber,
+            webhookSecret,
+            isLive,
+            isConfigured,
+            hasValidPayoutAccount,
+            source: useStored ? 'settings' : 'env',
+          };
         };
 
         if (url === '/api/razorpay/config') {
@@ -1237,8 +1295,13 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               keyId: rzp.keyId,
               isConfigured: rzp.isConfigured,
               isLive: rzp.isLive,
-              accountNumber: rzp.accountNumber ? `${rzp.accountNumber.slice(0, 4)}••••${rzp.accountNumber.slice(-4)}` : '',
+              hasSecret: Boolean(rzp.keySecret),
+              hasValidPayoutAccount: rzp.hasValidPayoutAccount,
+              accountNumber: rzp.hasValidPayoutAccount
+                ? `${rzp.accountNumber.slice(0, 4)}••••${rzp.accountNumber.slice(-4)}`
+                : '',
               webhookConfigured: Boolean(rzp.webhookSecret),
+              source: rzp.source,
               merchantName: 'Fest-Plus College Events',
             });
           }
@@ -1246,38 +1309,42 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           if (req.method === 'POST') {
             try {
               const body = await parseBody(req);
+              const rzp = getActiveRzp();
               const newKeyId = (body.keyId || '').trim();
               const newKeySecret = (body.keySecret || '').trim();
               const newAccountNumber = (body.accountNumber || '').trim();
               const newWebhookSecret = (body.webhookSecret || '').trim();
 
-              if (!newKeyId) {
-                return sendJson(res, 400, { error: 'Razorpay Key ID is required (must start with rzp_test_ or rzp_live_)' });
+              if (!newKeyId || (!newKeyId.startsWith('rzp_live_') && !newKeyId.startsWith('rzp_test_'))) {
+                return sendJson(res, 400, { error: 'Valid Razorpay Key ID is required (must start with rzp_live_ or rzp_test_).' });
+              }
+              if (isLegacyDemoKeyId(newKeyId) || isLegacyDemoSecret(newKeySecret)) {
+                return sendJson(res, 400, { error: 'Demo placeholder keys are not accepted. Please provide your Razorpay merchant API credentials.' });
+              }
+
+              const effectiveSecret = newKeySecret || rzp.keySecret;
+              if (!effectiveSecret) {
+                return sendJson(res, 400, { error: 'Razorpay Key Secret is required.' });
+              }
+
+              if (newAccountNumber && newAccountNumber.startsWith('rzp_')) {
+                return sendJson(res, 400, {
+                  error: 'RazorpayX Account Number should be your RazorpayX Current/Virtual Account Number (digits), not your rzp_ Key ID.',
+                });
               }
 
               db.razorpayConfig = {
                 keyId: newKeyId,
-                keySecret: newKeySecret || db.razorpayConfig?.keySecret || '',
-                accountNumber: newAccountNumber,
-                webhookSecret: newWebhookSecret,
+                keySecret: effectiveSecret,
+                accountNumber: newAccountNumber.includes('••••') ? rzp.accountNumber : newAccountNumber,
+                webhookSecret: newWebhookSecret || rzp.webhookSecret || '',
+                updatedViaUi: true,
               };
               saveDatabase(db);
 
-              // Persist to .env for build/runtime synchronization
-              updateEnvKey('VITE_RAZORPAY_KEY_ID', newKeyId);
-              if (newKeySecret) {
-                updateEnvKey('VITE_RAZORPAY_KEY_SECRET', newKeySecret);
-              }
-              if (newAccountNumber) {
-                updateEnvKey('RAZORPAY_ACCOUNT_NUMBER', newAccountNumber);
-              }
-              if (newWebhookSecret) {
-                updateEnvKey('RAZORPAY_WEBHOOK_SECRET', newWebhookSecret);
-              }
-
               return sendJson(res, 200, {
                 success: true,
-                message: 'Razorpay credentials saved and configured successfully.',
+                message: `Razorpay ${newKeyId.startsWith('rzp_live_') ? 'Live Production' : 'Test Mode'} credentials saved and activated.`,
                 keyId: newKeyId,
                 isLive: newKeyId.startsWith('rzp_live_'),
               });
@@ -1297,7 +1364,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (!keyToTest || !secretToTest) {
               return sendJson(res, 400, {
                 success: false,
-                error: 'Please provide both Key ID and Key Secret to test the gateway connection.',
+                error: 'Please provide both Razorpay Key ID and Key Secret to test the gateway connection.',
               });
             }
 
@@ -1313,15 +1380,15 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               return sendJson(res, 200, {
                 success: true,
                 isLive,
-                mode: isLive ? 'Production Live Gateway' : 'Sandbox Test Mode',
-                message: `Connection successful! ${isLive ? 'Live payments active' : 'Test sandbox active'}.`,
+                mode: isLive ? 'Live Production Gateway' : 'Razorpay Test Gateway',
+                message: `Verified with Razorpay API! ${isLive ? 'Live payments active (real UPI, Cards & NetBanking).' : 'Razorpay Test Gateway active.'}`,
               });
             } else {
               const errData: any = await checkRes.json().catch(() => ({}));
               return sendJson(res, 200, {
                 success: false,
                 statusCode: checkRes.status,
-                error: errData?.error?.description || 'Authentication failed. Please verify your Razorpay Key ID and Secret.',
+                error: errData?.error?.description || 'Authentication failed with Razorpay API. Please verify your Key ID and Key Secret.',
               });
             }
           } catch (err: any) {
@@ -1334,38 +1401,49 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             const body = await parseBody(req);
             const rzp = getActiveRzp();
 
-            if (!rzp.keyId || !rzp.keySecret) {
-              return sendJson(res, 401, { error: 'Razorpay API keys not configured. Please provide RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.' });
+            if (!rzp.isConfigured) {
+              return sendJson(res, 503, {
+                error: 'Real Razorpay gateway credentials are not configured on the server. Please add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in Secrets.',
+              });
             }
 
-            // Parse amount in paise (minimum 100 paise)
+            const qty = Math.max(1, Math.min(10, Math.floor(Number(body.quantity) || 1)));
+            const eventId = String(body.eventId || '').trim();
+            const matchedEvent = eventId ? db.events.find((e: any) => e.eventId === eventId) : null;
+
             let amountInPaise = 0;
-            if (body.amount !== undefined && body.amount !== null) {
-              const numAmount = Number(body.amount);
-              if (body.amountInRupees !== undefined) {
-                amountInPaise = Math.round(Number(body.amountInRupees) * 100);
-              } else if (body.amountInPaise !== undefined) {
-                amountInPaise = Math.round(Number(body.amountInPaise));
-              } else if (numAmount > 0 && numAmount < 100) {
-                // If amount is small (e.g. 10 or 50 rupees), convert to paise
-                amountInPaise = Math.round(numAmount * 100);
-              } else {
-                amountInPaise = Math.round(numAmount);
+            if (matchedEvent) {
+              if (matchedEvent.status === 'cancelled') {
+                return sendJson(res, 400, { error: 'This event has been cancelled by the organizer.' });
               }
+              if (matchedEvent.status === 'sold_out' || Number(matchedEvent.availableTickets) < qty) {
+                return sendJson(res, 409, { error: `Only ${matchedEvent.availableTickets || 0} tickets remaining for this event.` });
+              }
+              const unitPrice = Number(matchedEvent.price) || 0;
+              if (unitPrice <= 0) {
+                return sendJson(res, 400, { error: 'Free events do not require a Razorpay payment order.' });
+              }
+              amountInPaise = Math.round(unitPrice * qty * 100);
+            } else if (body.amountInPaise !== undefined) {
+              amountInPaise = Math.round(Number(body.amountInPaise));
+            } else if (body.amountInRupees !== undefined) {
+              amountInPaise = Math.round(Number(body.amountInRupees) * 100);
+            } else if (body.amount !== undefined) {
+              amountInPaise = Math.round(Number(body.amount));
             }
 
             if (isNaN(amountInPaise) || amountInPaise < 100) {
-              return sendJson(res, 400, { error: 'Amount must be at least 100 paise (₹1).' });
+              return sendJson(res, 400, { error: 'Order amount must be at least ₹1 (100 paise).' });
             }
 
             const currency = String(body.currency || 'INR').toUpperCase();
-            const receipt = String(body.receipt || `rcpt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
+            const receipt = String(body.receipt || `rcpt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`).slice(0, 40);
             const notes = body.notes || {
-              eventId: String(body.eventId || ''),
-              eventTitle: String(body.eventTitle || '').substring(0, 40),
+              eventId,
+              eventTitle: String(matchedEvent?.title || body.eventTitle || '').substring(0, 40),
               studentName: String(body.studentName || '').substring(0, 40),
               studentEmail: String(body.studentEmail || '').substring(0, 40),
-              quantity: String(body.quantity || 1),
+              quantity: String(qty),
             };
 
             const basicAuth = Buffer.from(`${rzp.keyId}:${rzp.keySecret}`).toString('base64');
@@ -1379,6 +1457,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
                 amount: amountInPaise,
                 currency,
                 receipt,
+                payment_capture: 1,
                 notes,
               }),
             });
@@ -1387,20 +1466,19 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
 
             if (rzpRes.status === 401) {
               return sendJson(res, 401, {
-                error: 'Authentication failed with Razorpay API. Invalid Key ID or Key Secret.',
+                error: 'Razorpay authentication failed. Please check your Key ID and Key Secret.',
                 details: rzpData?.error,
               });
             }
 
-            if (!rzpRes.ok) {
+            if (!rzpRes.ok || !rzpData.id) {
               console.error('[Razorpay Order Creation API Error]:', rzpData);
-              return sendJson(res, 500, {
+              return sendJson(res, rzpRes.status >= 400 ? rzpRes.status : 502, {
                 error: rzpData?.error?.description || 'Razorpay order creation failed.',
                 details: rzpData?.error,
               });
             }
 
-            // Return required contract: { order_id, amount, currency }
             return sendJson(res, 200, {
               success: true,
               order_id: rzpData.id,
@@ -1414,7 +1492,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             });
           } catch (err: any) {
             console.error('[Razorpay Create Order Exception]', err);
-            return sendJson(res, 500, { error: err.message || 'Server error creating Razorpay order' });
+            return sendJson(res, 502, { error: err.message || 'Server error creating Razorpay order' });
           }
         }
 
@@ -1423,27 +1501,49 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             const body = await parseBody(req);
             const rzp = getActiveRzp();
 
-            const orderId = body.razorpay_order_id || body.order_id || body.orderId;
-            const paymentId = body.razorpay_payment_id || body.payment_id || body.paymentId;
-            const signature = body.razorpay_signature || body.signature;
-
-            // Missing fields validation
-            if (!orderId || !paymentId || !signature) {
-              return sendJson(res, 400, {
+            if (!rzp.isConfigured) {
+              return sendJson(res, 503, {
                 success: false,
-                error: 'Missing required fields: razorpay_order_id, razorpay_payment_id, and razorpay_signature are required.',
+                verified: false,
+                error: 'Razorpay gateway is not configured on the server.',
               });
             }
 
-            // Cryptographic HMAC-SHA256 Signature Verification:
-            // Algorithm: HMAC-SHA256(order_id + "|" + payment_id, KEY_SECRET)
+            const orderId = String(body.razorpay_order_id || body.order_id || body.orderId || '').trim();
+            const paymentId = String(body.razorpay_payment_id || body.payment_id || body.paymentId || '').trim();
+            const signature = String(body.razorpay_signature || body.signature || '').trim();
+
+            if (!orderId || !paymentId || !signature) {
+              return sendJson(res, 400, {
+                success: false,
+                verified: false,
+                error: 'Missing required Razorpay verification fields (razorpay_order_id, razorpay_payment_id, razorpay_signature).',
+              });
+            }
+
+            // Prevent replay of an already verified payment
+            const duplicatePayment = Array.isArray(db.payments)
+              ? db.payments.find((p: any) => p.paymentId === paymentId && p.status === 'captured')
+              : null;
+            if (duplicatePayment) {
+              return sendJson(res, 409, {
+                success: false,
+                verified: false,
+                error: 'This payment reference has already been verified and issued.',
+              });
+            }
+
+            // 1. Cryptographic HMAC-SHA256 verification (constant-time comparison)
             const expectedSignature = crypto
               .createHmac('sha256', rzp.keySecret)
               .update(`${orderId}|${paymentId}`)
               .digest('hex');
 
-            const isTestSimulated = Boolean(paymentId.startsWith('pay_test_') && signature.startsWith('sig_test_'));
-            const isSignatureValid = isTestSimulated || (expectedSignature === signature);
+            const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+            const receivedBuf = Buffer.from(signature, 'utf8');
+            const isSignatureValid =
+              expectedBuf.length === receivedBuf.length &&
+              crypto.timingSafeEqual(expectedBuf, receivedBuf);
 
             if (!isSignatureValid) {
               return sendJson(res, 400, {
@@ -1453,13 +1553,67 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               });
             }
 
-            // Signature matched! Record payment as captured in database
+            // 2. Authoritative status check against Razorpay Payments REST API
+            const basicAuth = Buffer.from(`${rzp.keyId}:${rzp.keySecret}`).toString('base64');
+            const rzpPaymentRes = await fetch(`https://api.razorpay.com/v1/payments/${encodeURIComponent(paymentId)}`, {
+              headers: { Authorization: `Basic ${basicAuth}` },
+            });
+
+            if (!rzpPaymentRes.ok) {
+              const errBody: any = await rzpPaymentRes.json().catch(() => ({}));
+              return sendJson(res, 400, {
+                success: false,
+                verified: false,
+                error: errBody?.error?.description || 'Could not confirm payment status with Razorpay API.',
+              });
+            }
+
+            const rzpPayment: any = await rzpPaymentRes.json();
+            if (rzpPayment.order_id && rzpPayment.order_id !== orderId) {
+              return sendJson(res, 400, {
+                success: false,
+                verified: false,
+                error: 'Payment order mismatch detected by Razorpay gateway.',
+              });
+            }
+
+            // If authorized but not yet captured, capture via Razorpay API
+            let finalPaymentStatus = rzpPayment.status;
+            if (finalPaymentStatus === 'authorized') {
+              const captureRes = await fetch(`https://api.razorpay.com/v1/payments/${encodeURIComponent(paymentId)}/capture`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Basic ${basicAuth}`,
+                },
+                body: JSON.stringify({
+                  amount: rzpPayment.amount,
+                  currency: rzpPayment.currency || 'INR',
+                }),
+              });
+              if (captureRes.ok) {
+                const capData: any = await captureRes.json().catch(() => ({}));
+                finalPaymentStatus = capData.status || 'captured';
+              }
+            }
+
+            if (finalPaymentStatus !== 'captured') {
+              return sendJson(res, 400, {
+                success: false,
+                verified: false,
+                error: `Payment is in "${finalPaymentStatus}" state and has not been captured by Razorpay.`,
+              });
+            }
+
+            // Verified & captured! Record payment in database
             const paymentRecord = {
               paymentId,
               orderId,
-              amount: Number(body.amount) || 0,
+              amount: Number(rzpPayment.amount ? rzpPayment.amount / 100 : body.amount) || 0,
+              currency: rzpPayment.currency || 'INR',
               status: 'captured',
-              method: 'razorpay_standard',
+              method: rzpPayment.method || 'razorpay_standard',
+              vpa: rzpPayment.vpa || undefined,
               eventId: body.eventId || '',
               userId: body.userId || '',
               studentName: body.userName || body.studentName || '',
@@ -1473,113 +1627,156 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             }
             db.payments.push(paymentRecord);
             saveDatabase(db);
+            broadcastRealtime('payments', { paymentId, eventId: paymentRecord.eventId });
 
             return sendJson(res, 200, {
               success: true,
               verified: true,
-              message: 'Payment signature verified successfully',
+              message: 'Payment signature and Razorpay capture verified successfully',
               payment_id: paymentId,
               order_id: orderId,
+              amount: paymentRecord.amount,
+              method: paymentRecord.method,
               status: 'captured',
+              isLive: rzp.isLive,
             });
           } catch (err: any) {
             console.error('[Razorpay Verify Payment Exception]', err);
-            return sendJson(res, 500, { error: err.message || 'Error verifying Razorpay payment signature' });
+            return sendJson(res, 502, {
+              success: false,
+              verified: false,
+              error: err.message || 'Error verifying Razorpay payment',
+            });
           }
         }
 
-        // 9. Razorpay Industrial Payout & Settlement Endpoint
+        // 9. RazorpayX Live Payout & Settlement Endpoint (No simulated payouts)
         if (url === '/api/razorpay/create-payout' && req.method === 'POST') {
           try {
             const body = await parseBody(req);
             const rzp = getActiveRzp();
 
+            if (!rzp.isConfigured) {
+              return sendJson(res, 503, {
+                success: false,
+                error: 'Razorpay API credentials are not configured on the server.',
+              });
+            }
+
+            if (!rzp.hasValidPayoutAccount) {
+              return sendJson(res, 400, {
+                success: false,
+                code: 'RAZORPAYX_ACCOUNT_REQUIRED',
+                error:
+                  'A valid RazorpayX Current/Virtual Account Number (RAZORPAY_ACCOUNT_NUMBER) is required for automated API payouts. Ticket collections made on Razorpay Standard automatically settle to your linked bank account on your Razorpay settlement schedule.',
+              });
+            }
+
             const amountInRupees = Number(body.amount) || 0;
             if (amountInRupees <= 0) {
-              return sendJson(res, 400, { error: 'Settlement amount must be greater than ₹0' });
+              return sendJson(res, 400, { success: false, error: 'Settlement amount must be greater than ₹0' });
+            }
+
+            const hostId = String(body.hostId || '').trim();
+            if (!hostId) {
+              return sendJson(res, 401, { success: false, error: 'Authenticated organizer ID is required for payouts.' });
+            }
+
+            // Server-side balance check when organizer records exist in db
+            const hostEvents = db.events.filter((e: any) => e.hostId === hostId);
+            const hostEventIds = new Set(hostEvents.map((e: any) => e.eventId));
+            const hostTickets = db.tickets.filter((t: any) => t.hostId === hostId || hostEventIds.has(t.eventId));
+            const ticketsRev = hostTickets
+              .filter((t: any) => t.status === 'confirmed')
+              .reduce((acc: number, t: any) => acc + (Number(t.amount) || 0), 0);
+            const eventsRev = hostEvents.reduce((acc: number, e: any) => acc + ((Number(e.ticketsSold) || 0) * (Number(e.price) || 0)), 0);
+            const grossRev = Math.max(ticketsRev, eventsRev);
+            const settledAlready = db.payouts
+              .filter((p: any) => p.hostId === hostId)
+              .reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
+            const serverAvailable = Math.max(0, grossRev - settledAlready);
+
+            if (grossRev > 0 && amountInRupees > serverAvailable) {
+              return sendJson(res, 400, {
+                success: false,
+                error: `Requested settlement (₹${amountInRupees.toLocaleString()}) exceeds verified available balance (₹${serverAvailable.toLocaleString()}).`,
+              });
             }
 
             const method: 'UPI' | 'BANK_TRANSFER' = body.method === 'BANK_TRANSFER' ? 'BANK_TRANSFER' : 'UPI';
             const destination = String(body.destination || '').trim();
-            const accountHolderName = String(body.accountHolderName || 'Campus Host Committee').trim();
-            const hostId = String(body.hostId || 'host_user').trim();
+            const accountHolderName = String(body.accountHolderName || '').trim();
             const hostName = String(body.hostName || accountHolderName).trim();
             const ifscCode = String(body.ifscCode || '').trim().toUpperCase();
             const bankName = String(body.bankName || 'Bank Account').trim();
 
-            if (method === 'UPI' && (!destination || !destination.includes('@'))) {
-              return sendJson(res, 400, { error: 'Valid UPI ID (e.g. mobile@upi) is required for UPI settlement' });
+            if (!accountHolderName) {
+              return sendJson(res, 400, { success: false, error: 'Beneficiary account holder name is required.' });
             }
 
-            if (method === 'BANK_TRANSFER' && (!destination || destination.length < 8 || !ifscCode)) {
-              return sendJson(res, 400, { error: 'Valid Bank Account number and IFSC code are required' });
+            if (method === 'UPI' && (!destination || !destination.includes('@'))) {
+              return sendJson(res, 400, { success: false, error: 'Valid UPI ID (e.g. mobile@upi) is required for UPI settlement.' });
+            }
+
+            if (method === 'BANK_TRANSFER' && (!destination || destination.length < 8 || ifscCode.length < 5)) {
+              return sendJson(res, 400, { success: false, error: 'Valid Bank Account number and IFSC code are required.' });
             }
 
             const amountInPaise = Math.round(amountInRupees * 100);
             const referenceId = `SETTLE_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+            const idempotencyKey = `idem_${hostId}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
             const basicAuth = Buffer.from(`${rzp.keyId}:${rzp.keySecret}`).toString('base64');
 
-            let payoutId = `pout_rzp_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-            let bankUtr = `RZPUTR${Math.floor(100000000000 + Math.random() * 900000000000)}`;
-            let payoutStatus = 'completed';
-            let isLivePayout = false;
-
-            // Attempt Live RazorpayX Payout API Dispatch
-            try {
-              const rzpPayoutPayload: any = {
-                account_number: rzp.accountNumber || '7878780080316316',
-                amount: amountInPaise,
-                currency: 'INR',
-                mode: method === 'UPI' ? 'UPI' : 'IMPS',
-                purpose: 'payout',
-                fund_account: {
-                  account_type: method === 'UPI' ? 'vpa' : 'bank_account',
-                  vpa: method === 'UPI' ? { address: destination } : undefined,
-                  bank_account: method === 'BANK_TRANSFER' ? {
-                    name: accountHolderName,
-                    ifsc: ifscCode,
-                    account_number: destination,
-                  } : undefined,
-                  contact: {
-                    name: accountHolderName,
-                    type: 'vendor',
-                    reference_id: hostId,
-                  },
+            const rzpPayoutPayload: any = {
+              account_number: rzp.accountNumber,
+              amount: amountInPaise,
+              currency: 'INR',
+              mode: method === 'UPI' ? 'UPI' : 'IMPS',
+              purpose: 'payout',
+              fund_account: {
+                account_type: method === 'UPI' ? 'vpa' : 'bank_account',
+                vpa: method === 'UPI' ? { address: destination } : undefined,
+                bank_account: method === 'BANK_TRANSFER' ? {
+                  name: accountHolderName,
+                  ifsc: ifscCode,
+                  account_number: destination,
+                } : undefined,
+                contact: {
+                  name: accountHolderName,
+                  type: 'vendor',
+                  reference_id: hostId,
                 },
-                queue_if_low_balance: true,
-                reference_id: referenceId,
-                narration: 'Fest Revenue Settlement',
-              };
+              },
+              queue_if_low_balance: true,
+              reference_id: referenceId,
+              narration: 'Fest Revenue Settlement',
+            };
 
-              const rzpPayoutRes = await fetch('https://api.razorpay.com/v1/payouts', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Basic ${basicAuth}`,
-                },
-                body: JSON.stringify(rzpPayoutPayload),
+            const rzpPayoutRes = await fetch('https://api.razorpay.com/v1/payouts', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Basic ${basicAuth}`,
+                'X-Payout-Idempotency': idempotencyKey,
+              },
+              body: JSON.stringify(rzpPayoutPayload),
+            });
+
+            const rzpPayoutData: any = await rzpPayoutRes.json().catch(() => ({}));
+
+            if (!rzpPayoutRes.ok || !rzpPayoutData.id) {
+              console.error('[RazorpayX Payout API Error]:', rzpPayoutData);
+              return sendJson(res, rzpPayoutRes.status >= 400 ? rzpPayoutRes.status : 502, {
+                success: false,
+                error: rzpPayoutData?.error?.description || 'RazorpayX payout request failed. Please verify your RazorpayX account balance & credentials.',
+                details: rzpPayoutData?.error,
               });
-
-              if (rzpPayoutRes.ok) {
-                const rzpPayoutData: any = await rzpPayoutRes.json();
-                if (rzpPayoutData.id) {
-                  payoutId = rzpPayoutData.id;
-                  bankUtr = rzpPayoutData.utr || bankUtr;
-                  payoutStatus = rzpPayoutData.status || 'processed';
-                  isLivePayout = true;
-                }
-              } else {
-                const errLog: any = await rzpPayoutRes.json().catch(() => ({}));
-                console.log('[Razorpay Payout Info] Sandbox fallback:', errLog?.error?.description || rzpPayoutRes.statusText);
-              }
-            } catch (payoutErr) {
-              console.warn('[Razorpay Payout Dispatch Warning]', payoutErr);
             }
 
             const destinationFormatted = method === 'UPI' ? destination : `${destination} (${bankName})`;
 
             const payoutRecord: any = {
-              payoutId,
+              payoutId: rzpPayoutData.id,
               hostId,
               hostName,
               amount: amountInRupees,
@@ -1587,13 +1784,13 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               method,
               destination: destinationFormatted,
               accountHolderName,
-              status: payoutStatus,
-              referenceId: bankUtr,
-              gatewayRef: payoutId,
-              gateway: 'INSTANT_PAYOUT',
+              status: rzpPayoutData.status || 'processing',
+              referenceId: rzpPayoutData.utr || referenceId,
+              gatewayRef: rzpPayoutData.id,
+              gateway: 'RAZORPAYX_PAYOUT',
               timestamp: new Date().toISOString(),
-              notes: body.notes || `Host on-demand revenue settlement via ${method}`,
-              isLive: isLivePayout,
+              notes: body.notes || `Host revenue settlement via RazorpayX ${method}`,
+              isLive: rzp.isLive,
             };
             if (method === 'BANK_TRANSFER' && bankName) payoutRecord.bankName = bankName;
             if (method === 'BANK_TRANSFER' && ifscCode) payoutRecord.ifscCode = ifscCode;
@@ -1601,7 +1798,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (!Array.isArray(db.payouts)) {
               db.payouts = [];
             }
-            const existIdx = db.payouts.findIndex((p: any) => p.payoutId === payoutId);
+            const existIdx = db.payouts.findIndex((p: any) => p.payoutId === payoutRecord.payoutId);
             if (existIdx > -1) {
               db.payouts[existIdx] = payoutRecord;
             } else {
@@ -1612,36 +1809,65 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
 
             return sendJson(res, 200, {
               success: true,
-              message: `₹${amountInRupees.toLocaleString()} settled successfully and dispatched via Razorpay ${method === 'UPI' ? 'Instant UPI' : 'Bank IMPS'} Gateway!`,
+              message: `₹${amountInRupees.toLocaleString()} dispatched via RazorpayX ${method === 'UPI' ? 'UPI' : 'IMPS'}!`,
               payout: payoutRecord,
-              utr: bankUtr,
-              gatewayPayoutId: payoutId,
-              isLive: isLivePayout,
+              utr: payoutRecord.referenceId,
+              gatewayPayoutId: payoutRecord.payoutId,
+              isLive: rzp.isLive,
             });
           } catch (err: any) {
             console.error('[Razorpay Payout Exception]', err);
-            return sendJson(res, 500, { error: err.message || 'Error processing Razorpay settlement payout' });
+            return sendJson(res, 502, { success: false, error: err.message || 'Error processing RazorpayX settlement payout' });
           }
         }
 
-        // 10. Razorpay Webhook Event Listener
+        // 10. Razorpay Webhook Event Listener (raw body HMAC verification)
         if (url === '/api/razorpay/webhook' && req.method === 'POST') {
           try {
-            const body = await parseBody(req);
+            const { raw: rawBody, json: body } = await parseRawBody(req);
             const rzp = getActiveRzp();
-            const signature = req.headers['x-razorpay-signature'] as string;
+            const signature = String(req.headers['x-razorpay-signature'] || '').trim();
 
-            if (rzp.webhookSecret && signature) {
-              const expectedSignature = crypto
-                .createHmac('sha256', rzp.webhookSecret)
-                .update(JSON.stringify(body))
-                .digest('hex');
-              if (expectedSignature !== signature) {
-                return sendJson(res, 400, { error: 'Invalid webhook signature' });
+            if (!rzp.webhookSecret) {
+              return sendJson(res, 503, { error: 'Razorpay webhook secret is not configured.' });
+            }
+            if (!signature) {
+              return sendJson(res, 400, { error: 'Missing x-razorpay-signature header.' });
+            }
+
+            const expectedSignature = crypto
+              .createHmac('sha256', rzp.webhookSecret)
+              .update(rawBody)
+              .digest('hex');
+
+            const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+            const receivedBuf = Buffer.from(signature, 'utf8');
+            if (expectedBuf.length !== receivedBuf.length || !crypto.timingSafeEqual(expectedBuf, receivedBuf)) {
+              return sendJson(res, 400, { error: 'Invalid webhook signature' });
+            }
+
+            console.log('[Razorpay Webhook Event Verified]:', body.event);
+            if (body.event === 'payment.captured' && body.payload?.payment?.entity) {
+              const entity = body.payload.payment.entity;
+              if (!Array.isArray(db.payments)) db.payments = [];
+              const existing = db.payments.find((p: any) => p.paymentId === entity.id);
+              if (!existing) {
+                db.payments.push({
+                  paymentId: entity.id,
+                  orderId: entity.order_id || '',
+                  amount: Number(entity.amount || 0) / 100,
+                  currency: entity.currency || 'INR',
+                  status: 'captured',
+                  method: entity.method || 'razorpay_webhook',
+                  vpa: entity.vpa || undefined,
+                  timestamp: new Date().toISOString(),
+                  isLive: rzp.isLive,
+                });
+                saveDatabase(db);
+                broadcastRealtime('payments', { paymentId: entity.id });
               }
             }
 
-            console.log('[Razorpay Webhook Event Received]:', body.event);
             return sendJson(res, 200, { status: 'ok', event: body.event });
           } catch (err: any) {
             return sendJson(res, 500, { error: err.message || 'Webhook processing failed' });

@@ -1,14 +1,15 @@
-import { CollegeEvent, Ticket, PaymentRecord, PayoutRecord } from '../types';
+import type { Ticket, PaymentRecord, PayoutRecord } from '../types';
 import { StorageService } from './storageService';
 import { FirebaseDbService } from './firebaseDbService';
 
-// Razorpay Official Credentials (Configured with Test Mode Keys for Sandbox Testing)
+const envKeyId = ((import.meta as any).env?.VITE_RAZORPAY_KEY_ID as string) || '';
+
+// Public Razorpay Gateway metadata (Secrets stay strictly server-side)
 export const RAZORPAY_CONFIG = {
-  keyId: ((import.meta as any).env?.VITE_RAZORPAY_KEY_ID as string) || 'rzp_test_Tn2gGCmZM8sHv0',
-  keySecret: ((import.meta as any).env?.VITE_RAZORPAY_KEY_SECRET as string) || 'nLuBuOx9Mu7NzmTCbAX8hLfP',
+  keyId: envKeyId,
   merchantName: 'Fest-Plus',
   themeColor: '#4f46e5',
-  isTestMode: true
+  isLive: envKeyId.startsWith('rzp_live_'),
 };
 
 export interface HostPayoutRequest {
@@ -35,10 +36,11 @@ export interface OrderCreationResult {
   orderId: string;
   amount: number;
   currency: string;
+  keyId: string;
+  isLive: boolean;
   eventId: string;
   eventTitle: string;
   serverTimestamp: number;
-  signatureChallenge: string;
 }
 
 export interface PaymentVerificationRequest {
@@ -53,7 +55,6 @@ export interface PaymentVerificationRequest {
   rollNo?: string;
   quantity?: number;
   upiVpa?: string;
-  signatureChallenge: string;
   razorpaySignature?: string;
 }
 
@@ -64,35 +65,16 @@ export interface PaymentVerificationResponse {
   paymentRecord?: PaymentRecord;
 }
 
-export interface RazorpayCheckoutOptions {
-  key: string;
-  amount: number;
-  currency: string;
-  name: string;
-  description: string;
-  image?: string;
-  order_id?: string;
-  handler: (response: {
-    razorpay_payment_id: string;
-    razorpay_order_id?: string;
-    razorpay_signature?: string;
-  }) => void;
-  prefill?: {
-    name?: string;
-    email?: string;
-    contact?: string;
-  };
-  notes?: {
-    eventId?: string;
-    ticketQuantity?: string;
-    studentName?: string;
-  };
-  theme?: {
-    color?: string;
-  };
-  modal?: {
-    ondismiss?: () => void;
-  };
+export interface RazorpayGatewayConfigStatus {
+  keyId: string;
+  isConfigured: boolean;
+  isLive: boolean;
+  hasSecret: boolean;
+  hasValidPayoutAccount: boolean;
+  accountNumber?: string;
+  webhookConfigured: boolean;
+  source?: string;
+  merchantName: string;
 }
 
 export class PaymentService {
@@ -117,7 +99,7 @@ export class PaymentService {
           if ((window as any).Razorpay) {
             clearInterval(interval);
             resolve(true);
-          } else if (checks > 20) {
+          } else if (checks > 30) {
             clearInterval(interval);
             resolve(false);
           }
@@ -134,7 +116,7 @@ export class PaymentService {
   }
 
   /**
-   * Launch Razorpay Standard Hosted Checkout
+   * Launch Razorpay Standard Hosted Checkout with a real server-created order_id
    */
   static async openRazorpayCheckout(params: {
     amountInRupees: number;
@@ -144,67 +126,74 @@ export class PaymentService {
     studentEmail: string;
     studentPhone: string;
     quantity: number;
-    orderId?: string;
-    onSuccess: (paymentId: string, orderId?: string, signature?: string) => void;
+    orderId: string;
+    keyId?: string;
+    onSuccess: (paymentId: string, orderId: string, signature: string) => void;
     onDismiss?: () => void;
     onError?: (error: any) => void;
   }): Promise<void> {
+    const activeKeyId = (params.keyId || RAZORPAY_CONFIG.keyId || '').trim();
+    if (!activeKeyId || (!activeKeyId.startsWith('rzp_live_') && !activeKeyId.startsWith('rzp_test_'))) {
+      throw new Error('Razorpay Key ID is not configured. Please add your Razorpay credentials in Gateway Settings or Secrets.');
+    }
+
+    if (!params.orderId || !params.orderId.startsWith('order_') || params.orderId.length <= 12) {
+      throw new Error('A valid Razorpay server order_id is required to launch checkout.');
+    }
+
     const isLoaded = await this.loadRazorpayScript();
     if (!isLoaded || !(window as any).Razorpay) {
-      throw new Error('Razorpay SDK could not be loaded. Please check your internet connection.');
+      throw new Error('Razorpay Checkout SDK failed to load. Please check your internet connection and try again.');
     }
 
     const amountInPaise = Math.round(params.amountInRupees * 100);
-
-    // Only pass real order_id from Razorpay API. Never pass fake or pseudo order strings.
-    const isValidOrderId = Boolean(
-      params.orderId &&
-      params.orderId.startsWith('order_') &&
-      params.orderId.length > 14 &&
-      !params.orderId.includes('order_rzp_')
-    );
-    const validOrderId = isValidOrderId ? params.orderId : undefined;
-
-    // Clean 10-digit contact number
     const cleanPhone = params.studentPhone ? params.studentPhone.replace(/\D/g, '').slice(-10) : '';
 
-    const options: any = {
-      key: RAZORPAY_CONFIG.keyId,
+    const options = {
+      key: activeKeyId,
       amount: amountInPaise,
       currency: 'INR',
-      name: 'Fest-Plus',
-      description: `Pass for ${params.eventName}`.substring(0, 40),
-      order_id: validOrderId,
+      name: RAZORPAY_CONFIG.merchantName,
+      description: `Pass for ${params.eventName}`.substring(0, 60),
+      order_id: params.orderId,
       handler: function (response: any) {
-        console.log('[Razorpay Handler Success]:', response);
+        if (!response?.razorpay_payment_id || !response?.razorpay_signature) {
+          if (params.onError) {
+            params.onError('Incomplete payment response received from Razorpay.');
+          }
+          return;
+        }
         params.onSuccess(
           response.razorpay_payment_id,
-          response.razorpay_order_id || validOrderId || params.orderId,
+          response.razorpay_order_id || params.orderId,
           response.razorpay_signature
         );
       },
       prefill: {
         name: params.studentName || 'Student',
         email: params.studentEmail || undefined,
-        contact: cleanPhone.length === 10 ? cleanPhone : undefined
+        contact: cleanPhone.length === 10 ? cleanPhone : undefined,
+      },
+      notes: {
+        eventId: params.eventId,
+        ticketQuantity: String(params.quantity),
+        studentName: params.studentName,
       },
       theme: {
-        color: '#4f46e5'
+        color: RAZORPAY_CONFIG.themeColor,
       },
       modal: {
         ondismiss: () => {
-          console.log('[Razorpay Modal Dismissed]');
           if (params.onDismiss) params.onDismiss();
-        }
-      }
+        },
+      },
     };
 
     const rzp = new (window as any).Razorpay(options);
 
     rzp.on('payment.failed', function (response: any) {
-      console.warn('[Razorpay Payment Failed Event]:', response);
       const errObj = response?.error;
-      const desc = errObj?.description || errObj?.reason || 'Payment could not be completed on gateway.';
+      const desc = errObj?.description || errObj?.reason || 'Payment could not be completed on Razorpay gateway.';
       if (params.onError) {
         params.onError(desc);
       }
@@ -213,14 +202,14 @@ export class PaymentService {
     try {
       rzp.open();
     } catch (err: any) {
-      console.error('[Razorpay open error]:', err);
       if (params.onError) params.onError(err);
       throw err;
     }
   }
 
   /**
-   * Creates an authentic live Razorpay order with inventory check
+   * Creates a real Razorpay Order via the backend server after checking inventory.
+   * Throws an explicit error if the gateway is unconfigured or order creation fails.
    */
   static async createPaymentOrder(
     eventId: string,
@@ -237,122 +226,148 @@ export class PaymentService {
       throw new Error('Event does not exist.');
     }
 
-    if (event.status === 'sold_out' || event.availableTickets <= 0) {
-      throw new Error('Tickets for this event are currently sold out.');
-    }
-
     if (event.status === 'cancelled') {
-      throw new Error('This event has been cancelled by the host.');
+      throw new Error('This event has been cancelled by the organizer.');
     }
 
-    const payableAmount = details?.amountInRupees ?? (event.price * (details?.quantity || 1));
-
-    // Call server to create authentic live Razorpay order
-    let realOrderId = '';
-    if (payableAmount > 0) {
-      try {
-        const res = await fetch('/api/create-order', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            amount: payableAmount * 100, // paise
-            currency: 'INR',
-            receipt: `rcpt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-            eventId: event.eventId,
-            eventTitle: event.title,
-            studentName: details?.studentName,
-            studentEmail: details?.studentEmail,
-            studentPhone: details?.studentPhone,
-            quantity: details?.quantity || 1,
-          }),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && (data.order_id || data.orderId)) {
-            realOrderId = data.order_id || data.orderId;
-            if (data.key_id || data.keyId) {
-              RAZORPAY_CONFIG.keyId = data.key_id || data.keyId;
-              RAZORPAY_CONFIG.isTestMode = !RAZORPAY_CONFIG.keyId.startsWith('rzp_live_');
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Backend order creation warning:', err);
-      }
-
-      // Direct fallback to Razorpay API if server endpoint was unreachable
-      if (!realOrderId && RAZORPAY_CONFIG.keyId && RAZORPAY_CONFIG.keySecret) {
-        try {
-          const basicAuth = btoa(`${RAZORPAY_CONFIG.keyId}:${RAZORPAY_CONFIG.keySecret}`);
-          const directRes = await fetch('https://api.razorpay.com/v1/orders', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Basic ${basicAuth}`,
-            },
-            body: JSON.stringify({
-              amount: payableAmount * 100,
-              currency: 'INR',
-              receipt: `rcpt_${Date.now().toString(36)}`,
-            }),
-          });
-          if (directRes.ok) {
-            const directData = await directRes.json();
-            if (directData?.id) {
-              realOrderId = directData.id;
-            }
-          }
-        } catch (e) {
-          console.warn('Direct order creation fallback notice:', e);
-        }
-      }
+    const qty = Math.max(1, Math.floor(Number(details?.quantity) || 1));
+    if (event.status === 'sold_out' || event.availableTickets < qty) {
+      throw new Error(
+        event.availableTickets <= 0
+          ? 'Tickets for this event are currently sold out.'
+          : `Only ${event.availableTickets} ticket(s) remaining for this event.`
+      );
     }
 
-    const orderId = realOrderId || `order_app_${Date.now()}`;
-    const serverTimestamp = Date.now();
-    const signatureChallenge = btoa(`${orderId}:${event.eventId}:${payableAmount}:${serverTimestamp}:${RAZORPAY_CONFIG.keySecret}`);
+    const authoritativeAmount = Number(event.price) * qty;
+
+    if (authoritativeAmount === 0) {
+      return {
+        orderId: `free_order_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        amount: 0,
+        currency: 'INR',
+        keyId: '',
+        isLive: false,
+        eventId: event.eventId,
+        eventTitle: event.title,
+        serverTimestamp: Date.now(),
+      };
+    }
+
+    const res = await fetch('/api/create-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: Math.round(authoritativeAmount * 100),
+        currency: 'INR',
+        receipt: `rcpt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        eventId: event.eventId,
+        eventTitle: event.title,
+        studentName: details?.studentName,
+        studentEmail: details?.studentEmail,
+        studentPhone: details?.studentPhone,
+        quantity: qty,
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.success || !(data.order_id || data.orderId)) {
+      throw new Error(data?.error || 'Could not create Razorpay payment order. Please check gateway configuration.');
+    }
+
+    const orderId = data.order_id || data.orderId;
+    const keyId = data.key_id || data.keyId || RAZORPAY_CONFIG.keyId;
+    const isLive = typeof data.isLive === 'boolean' ? data.isLive : Boolean(keyId?.startsWith('rzp_live_'));
+
+    if (keyId) {
+      RAZORPAY_CONFIG.keyId = keyId;
+      RAZORPAY_CONFIG.isLive = isLive;
+    }
 
     return {
       orderId,
-      amount: payableAmount,
-      currency: 'INR',
+      amount: authoritativeAmount,
+      currency: data.currency || 'INR',
+      keyId,
+      isLive,
       eventId: event.eventId,
       eventTitle: event.title,
-      serverTimestamp,
-      signatureChallenge
+      serverTimestamp: Date.now(),
     };
   }
 
   /**
-   * Verifies payment, updates event capacity, records payment in Firestore, and issues verified Ticket.
+   * Verifies Razorpay HMAC signature & capture state on the server BEFORE updating inventory or issuing a pass.
    */
   static async verifyPayment(req: PaymentVerificationRequest): Promise<PaymentVerificationResponse> {
     const event = StorageService.getEventById(req.eventId);
     if (!event) {
-      return { success: false, message: 'Event not found during server verification.' };
+      return { success: false, message: 'Event not found during verification.' };
     }
 
-    const qty = req.quantity && req.quantity > 0 ? req.quantity : 1;
+    if (event.status === 'cancelled') {
+      return { success: false, message: 'This event has been cancelled.' };
+    }
 
-    // Atomic concurrency check
+    const qty = req.quantity && req.quantity > 0 ? Math.floor(req.quantity) : 1;
     if (event.availableTickets < qty) {
-      return { success: false, message: `Transaction rolled back: Only ${event.availableTickets} tickets remaining.` };
+      return { success: false, message: `Only ${event.availableTickets} ticket(s) remaining.` };
     }
 
-    // Decrement inventory atomically
+    const totalAmount = Number(event.price) * qty;
+
+    // Paid passes MUST pass server-side HMAC-SHA256 + Razorpay capture verification first
+    if (totalAmount > 0) {
+      if (!req.orderId || !req.paymentId || !req.razorpaySignature) {
+        return {
+          success: false,
+          message: 'Missing Razorpay payment signature or transaction reference. Pass was not issued.',
+        };
+      }
+
+      try {
+        const verifyRes = await fetch('/api/verify-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            razorpay_order_id: req.orderId,
+            razorpay_payment_id: req.paymentId,
+            razorpay_signature: req.razorpaySignature,
+            amount: totalAmount,
+            eventId: event.eventId,
+            userId: req.userId,
+            userName: req.userName,
+            userEmail: req.userEmail,
+          }),
+        });
+
+        const verifyData = await verifyRes.json().catch(() => ({}));
+        if (!verifyRes.ok || !verifyData.success || !verifyData.verified) {
+          return {
+            success: false,
+            message: verifyData.error || 'Server payment verification failed. Pass was not issued.',
+          };
+        }
+      } catch (err: any) {
+        return {
+          success: false,
+          message: err?.message || 'Unable to verify payment with server. Please contact support with your Payment ID.',
+        };
+      }
+    }
+
+    // Decrement event capacity only after server payment verification passes (or free pass)
     const newTicketsSold = event.ticketsSold + qty;
     const newAvailable = Math.max(0, event.availableTickets - qty);
     StorageService.updateEvent(event.eventId, {
       ticketsSold: newTicketsSold,
       availableTickets: newAvailable,
-      status: newAvailable === 0 ? 'sold_out' : event.status
+      status: newAvailable === 0 ? 'sold_out' : event.status,
     });
 
     const ticketId = `TKT-${Math.floor(10000000 + Math.random() * 90000000)}`;
     const qrToken = `SEC-TK-${ticketId}-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
     const qrHash = `sha256_${Date.now()}_${Math.random().toString(36).substring(2, 12)}`;
-    const totalAmount = event.price * qty;
 
     const newTicket: Ticket = {
       ticketId,
@@ -370,7 +385,7 @@ export class PaymentService {
       rollNo: req.rollNo,
       quantity: qty,
       hostId: event.hostId,
-      hostPhone: event.hostPhone || '+91 91234 56789',
+      hostPhone: event.hostPhone || '',
       paymentId: req.paymentId,
       orderId: req.orderId,
       amount: totalAmount,
@@ -380,10 +395,9 @@ export class PaymentService {
       qrHash,
       issuedAt: new Date().toISOString(),
       entryStatus: 'not_entered',
-      exitStatus: 'not_exited'
+      exitStatus: 'not_exited',
     };
 
-    // Save ticket (both local storage and cloud Firestore database)
     StorageService.saveNewTicket(newTicket);
 
     const paymentRecord: PaymentRecord = {
@@ -394,58 +408,30 @@ export class PaymentService {
       userId: req.userId,
       amount: totalAmount,
       currency: 'INR',
-      gateway: event.price === 0 ? 'FREE_PASS' : 'UPI_RAZORPAY',
+      gateway: totalAmount === 0 ? 'FREE_PASS' : 'UPI_RAZORPAY',
       status: 'paid',
-      upiVpa: req.upiVpa || 'razorpay@checkout',
+      upiVpa: req.upiVpa || (totalAmount === 0 ? 'FREE_EVENT' : 'razorpay@checkout'),
       createdAt: new Date().toISOString(),
-      verifiedAt: new Date().toISOString()
+      verifiedAt: new Date().toISOString(),
     };
 
-    // Verify cryptographic signature and status with Razorpay live API
-    if (req.razorpaySignature && req.orderId && req.paymentId) {
-      try {
-        const verifyRes = await fetch('/api/verify-payment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            razorpay_order_id: req.orderId,
-            razorpay_payment_id: req.paymentId,
-            razorpay_signature: req.razorpaySignature,
-            amount: totalAmount,
-            eventId: event.eventId,
-            userId: req.userId,
-            userName: req.userName,
-            userEmail: req.userEmail,
-          }),
-        });
-
-        const verifyData = await verifyRes.json();
-        if (!verifyRes.ok || !verifyData.success) {
-          return {
-            success: false,
-            message: verifyData.error || 'Payment signature verification failed. Pass was not issued.',
-          };
-        }
-      } catch (e: any) {
-        console.warn('Server payment verification log:', e);
-      }
-    }
-
-    // Record payment in local cache and Firestore cloud database
     StorageService.saveNewPayment(paymentRecord);
-    FirebaseDbService.savePayment(paymentRecord).catch(e => console.warn('Cloud savePayment error:', e));
+    FirebaseDbService.savePayment(paymentRecord).catch((e) => console.warn('Cloud savePayment error:', e));
 
     return {
       success: true,
-      message: 'Razorpay payment verified and digital pass issued successfully!',
+      message:
+        totalAmount === 0
+          ? 'Free digital pass issued successfully!'
+          : 'Razorpay payment verified on server and digital pass issued successfully!',
       ticket: newTicket,
-      paymentRecord
+      paymentRecord,
     };
   }
 
   /**
-   * Process direct payout settlement for host revenue to their UPI VPA or Bank Account.
-   * Dispatches funds via Razorpay Payouts / Instant IMPS Settlement.
+   * Executes a genuine server-side RazorpayX payout to the host's UPI VPA or Bank Account.
+   * Never creates fake local/demo payout confirmations if RazorpayX rejects or isn't configured.
    */
   static async processHostPayout(req: HostPayoutRequest): Promise<HostPayoutResponse> {
     if (req.amount <= 0) {
@@ -465,113 +451,73 @@ export class PaymentService {
       }
     }
 
-    // Attempt Server-Side Razorpay Payout API Execution
-    try {
-      const res = await fetch('/api/razorpay/create-payout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount: req.amount,
-          method: req.method,
-          destination: req.destination.trim(),
-          accountHolderName: req.accountHolderName.trim(),
-          bankName: req.bankName?.trim(),
-          ifscCode: req.ifscCode?.trim().toUpperCase(),
-          hostId: req.hostId,
-          hostName: req.hostName,
-          notes: req.notes,
-        }),
-      });
+    const res = await fetch('/api/razorpay/create-payout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: req.amount,
+        method: req.method,
+        destination: req.destination.trim(),
+        accountHolderName: req.accountHolderName.trim(),
+        bankName: req.bankName?.trim(),
+        ifscCode: req.ifscCode?.trim().toUpperCase(),
+        hostId: req.hostId,
+        hostName: req.hostName,
+        notes: req.notes,
+      }),
+    });
 
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.payout) {
-          StorageService.savePayoutRecord(data.payout);
-          await FirebaseDbService.savePayout(data.payout).catch(e => console.warn('Cloud savePayout error:', e));
-          return {
-            success: true,
-            message: data.message || `₹${req.amount.toLocaleString()} settled successfully via Razorpay Payout Gateway!`,
-            payout: data.payout,
-            utr: data.utr,
-            gatewayPayoutId: data.gatewayPayoutId,
-          };
-        }
-      }
-    } catch (apiErr) {
-      console.warn('[PaymentService] Server payout call warning, executing fallback:', apiErr);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.success || !data.payout) {
+      throw new Error(
+        data?.error ||
+          data?.message ||
+          'RazorpayX payout request failed. Please verify your RazorpayX Account Number in Gateway Settings.'
+      );
     }
 
-    // Fallback: Generate Official Razorpay Payout Identification & Bank Clearing UTR
-    const timestampStr = Date.now().toString(36);
-    const randSuffix = Math.random().toString(36).substring(2, 7).toUpperCase();
-    const gatewayPayoutId = `pout_rzp_${timestampStr}_${randSuffix}`;
-    const bankUtr = `RZPUTR${Math.floor(100000000000 + Math.random() * 900000000000)}`;
-
-    const destinationFormatted = req.method === 'UPI'
-      ? req.destination.trim()
-      : `${req.destination.trim()} (${req.bankName?.trim() || 'Bank Account'})`;
-
-    const payoutRecord: PayoutRecord = {
-      payoutId: gatewayPayoutId,
-      hostId: req.hostId,
-      hostName: req.hostName,
-      amount: req.amount,
-      currency: 'INR',
-      method: req.method,
-      destination: destinationFormatted,
-      accountHolderName: req.accountHolderName.trim(),
-      bankName: req.method === 'BANK_TRANSFER' ? req.bankName?.trim() : undefined,
-      ifscCode: req.method === 'BANK_TRANSFER' ? req.ifscCode?.trim().toUpperCase() : undefined,
-      status: 'completed',
-      referenceId: bankUtr,
-      gatewayRef: gatewayPayoutId,
-      gateway: 'INSTANT_PAYOUT',
-      timestamp: new Date().toISOString(),
-      notes: req.notes || `Host revenue direct settlement via ${req.method}`
-    };
-
-    // Save payout to local ledger and sync to Firestore cloud database
-    StorageService.savePayoutRecord(payoutRecord);
+    StorageService.savePayoutRecord(data.payout);
+    await FirebaseDbService.savePayout(data.payout).catch((e) => console.warn('Cloud savePayout error:', e));
 
     return {
       success: true,
-      message: `₹${req.amount.toLocaleString()} settled successfully and dispatched to ${req.method === 'UPI' ? 'UPI VPA' : 'Bank Account'}!`,
-      payout: payoutRecord,
-      utr: bankUtr,
-      gatewayPayoutId
+      message: data.message || `₹${req.amount.toLocaleString()} dispatched via RazorpayX Payout Gateway.`,
+      payout: data.payout,
+      utr: data.utr,
+      gatewayPayoutId: data.gatewayPayoutId,
     };
   }
 
   /**
-   * Fetch current Razorpay gateway configuration from backend
+   * Fetch current Razorpay gateway status from backend (public fields only)
    */
-  static async getRazorpayGatewayConfig(): Promise<{
-    keyId: string;
-    isConfigured: boolean;
-    isLive: boolean;
-    accountNumber?: string;
-    webhookConfigured: boolean;
-    merchantName: string;
-  }> {
+  static async getRazorpayGatewayConfig(): Promise<RazorpayGatewayConfigStatus> {
     try {
       const res = await fetch('/api/razorpay/config');
       if (res.ok) {
-        return await res.json();
+        const cfg = await res.json();
+        if (cfg.keyId) {
+          RAZORPAY_CONFIG.keyId = cfg.keyId;
+          RAZORPAY_CONFIG.isLive = Boolean(cfg.isLive);
+        }
+        return cfg;
       }
     } catch (e) {
       console.warn('Failed to fetch razorpay config:', e);
     }
     return {
       keyId: RAZORPAY_CONFIG.keyId,
-      isConfigured: Boolean(RAZORPAY_CONFIG.keyId),
-      isLive: RAZORPAY_CONFIG.keyId.startsWith('rzp_live_'),
+      isConfigured: false,
+      isLive: RAZORPAY_CONFIG.isLive,
+      hasSecret: false,
+      hasValidPayoutAccount: false,
       webhookConfigured: false,
       merchantName: RAZORPAY_CONFIG.merchantName,
     };
   }
 
   /**
-   * Update Razorpay credentials dynamically
+   * Update Razorpay credentials on the server
    */
   static async updateRazorpayGatewayConfig(config: {
     keyId: string;
@@ -588,8 +534,7 @@ export class PaymentService {
       const data = await res.json();
       if (res.ok && data.success) {
         RAZORPAY_CONFIG.keyId = config.keyId;
-        if (config.keySecret) RAZORPAY_CONFIG.keySecret = config.keySecret;
-        RAZORPAY_CONFIG.isTestMode = !config.keyId.startsWith('rzp_live_');
+        RAZORPAY_CONFIG.isLive = Boolean(data.isLive ?? config.keyId.startsWith('rzp_live_'));
         return data;
       }
       return { success: false, error: data.error || 'Failed to update credentials' };
@@ -599,7 +544,7 @@ export class PaymentService {
   }
 
   /**
-   * Test live credentials connection against Razorpay API
+   * Test live credentials connection against Razorpay API via backend
    */
   static async testGatewayConnection(credentials?: {
     keyId?: string;
