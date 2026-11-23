@@ -38,160 +38,252 @@ if (typeof window !== 'undefined') {
 // Clean slate: events are created by users and hosts
 export const INITIAL_EVENTS: CollegeEvent[] = [];
 
+const ACTIVE_UID_KEY = 'campuspass_active_uid_v1';
+const REALTIME_CHANNEL_NAME = 'campuspass_realtime_v1';
+
+export interface SyncSession {
+  uid?: string;
+  email?: string;
+  role?: 'user' | 'host';
+}
+
+function readStoredAuthSession(): SyncSession | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem('festplus_auth_user_v1');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.uid && parsed.email) {
+      return {
+        uid: String(parsed.uid),
+        email: String(parsed.email).toLowerCase().trim(),
+        role: parsed.role === 'host' ? 'host' : 'user',
+      };
+    }
+  } catch {}
+  return null;
+}
+
+function broadcastTabUpdate(type: string) {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event('campuspass_data_updated'));
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const ch = new BroadcastChannel(REALTIME_CHANNEL_NAME);
+      ch.postMessage({ type, timestamp: Date.now() });
+      ch.close();
+    }
+  } catch {}
+}
+
 export class StorageService {
   private static isSyncing = false;
+  private static recentMutationIds = new Map<string, number>();
+
+  private static markMutation(id: string) {
+    if (!id) return;
+    this.recentMutationIds.set(id, Date.now());
+  }
+
+  private static isRecentMutation(id: string): boolean {
+    const ts = this.recentMutationIds.get(id);
+    if (!ts) return false;
+    if (Date.now() - ts > 6000) {
+      this.recentMutationIds.delete(id);
+      return false;
+    }
+    return true;
+  }
 
   /**
-   * Synchronizes data from Firestore into local cache.
-   * Firestore is the authoritative source of truth.
+   * Clears user-scoped caches (tickets, payouts, payments, bookmarks) on logout or user switch
+   * so the next logged-in account never sees leftover data from a previous user.
    */
-  static async syncFromCloud(): Promise<{ eventsCount: number; ticketsCount: number }> {
+  static clearUserScopedCache(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.removeItem(STORAGE_KEYS.TICKETS);
+      localStorage.removeItem(STORAGE_KEYS.PAYOUTS);
+      localStorage.removeItem(STORAGE_KEYS.PAYMENTS);
+      localStorage.removeItem(STORAGE_KEYS.BOOKMARKS);
+      localStorage.removeItem(ACTIVE_UID_KEY);
+      localStorage.removeItem('auth_user');
+      window.dispatchEvent(new Event('campuspass_data_updated'));
+    } catch {}
+  }
+
+  /**
+   * Ensures cached tickets/payouts/payments belong to the currently active uid.
+   */
+  static ensureActiveUserScope(uid?: string | null): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const cleanUid = (uid || '').trim();
+      if (!cleanUid) {
+        this.clearUserScopedCache();
+        return;
+      }
+      const prevUid = localStorage.getItem(ACTIVE_UID_KEY);
+      if (prevUid && prevUid !== cleanUid) {
+        localStorage.removeItem(STORAGE_KEYS.TICKETS);
+        localStorage.removeItem(STORAGE_KEYS.PAYOUTS);
+        localStorage.removeItem(STORAGE_KEYS.PAYMENTS);
+      }
+      localStorage.setItem(ACTIVE_UID_KEY, cleanUid);
+    } catch {}
+  }
+
+  /**
+   * Synchronizes data from Cloud API & Firestore into local cache strictly scoped to the active session.
+   */
+  static async syncFromCloud(explicitSession?: SyncSession | null): Promise<{ eventsCount: number; ticketsCount: number }> {
     if (this.isSyncing) {
       return { eventsCount: this.getEvents().length, ticketsCount: this.getTickets().length };
     }
     this.isSyncing = true;
 
+    const session = explicitSession !== undefined ? explicitSession : readStoredAuthSession();
+    if (session?.uid) {
+      this.ensureActiveUserScope(session.uid);
+    } else {
+      this.clearUserScopedCache();
+    }
+
     try {
-      // 1. Fetch from Firestore (AUTHORITATIVE MASTER DATABASE) with fast timeout
-      try {
-        const firestorePromise = Promise.all([
-          FirebaseDbService.getEvents(),
-          FirebaseDbService.getTickets(),
-          FirebaseDbService.getPayments(),
-          FirebaseDbService.getAccounts(),
-          FirebaseDbService.getPayouts(),
-        ]);
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Firestore sync timeout')), 2500)
-        );
-        const [fbEvents, fbTickets, fbPayments, fbAccounts, fbPayouts] = await Promise.race([
-          firestorePromise,
-          timeoutPromise
-        ]);
+      const activeUid = session?.uid?.trim() || '';
+      const activeEmail = session?.email?.toLowerCase().trim() || '';
+      const activeRole = session?.role === 'host' ? 'host' : 'user';
+      const hasSession = Boolean(activeUid || activeEmail);
 
-        // Merge events non-destructively: preserve local events and add cloud events
-        if (fbEvents && Array.isArray(fbEvents) && fbEvents.length > 0) {
-          const currentEvents = this.getEvents();
-          const eventMap = new Map<string, CollegeEvent>();
-          currentEvents.forEach(e => { if (e && e.eventId) eventMap.set(e.eventId, e); });
-          fbEvents.forEach(e => { if (e && e.eventId) eventMap.set(e.eventId, e); });
-          this.saveEvents(Array.from(eventMap.values()));
+      // 1. Fetch from Firestore if user is authenticated in Firebase Auth
+      let fbEvents: CollegeEvent[] = [];
+      let fbTickets: Ticket[] = [];
+      let fbPayouts: PayoutRecord[] = [];
+      if (hasSession && FirebaseDbService.getActiveFirebaseUid() === activeUid) {
+        try {
+          const firestorePromise = Promise.all([
+            FirebaseDbService.getEvents(activeUid),
+            FirebaseDbService.getTickets(activeUid, activeRole),
+            activeRole === 'host' ? FirebaseDbService.getPayouts(activeUid) : Promise.resolve([] as PayoutRecord[]),
+          ]);
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Firestore sync timeout')), 2500)
+          );
+          [fbEvents, fbTickets, fbPayouts] = await Promise.race([firestorePromise, timeoutPromise]);
+        } catch (fbErr) {
+          console.warn('[Sync] Firestore sync warning:', fbErr);
         }
-
-        // Merge tickets non-destructively: preserve local tickets and add cloud tickets
-        if (fbTickets && Array.isArray(fbTickets) && fbTickets.length > 0) {
-          const currentTickets = this.getTickets();
-          const ticketMap = new Map<string, Ticket>();
-          currentTickets.forEach(t => { if (t && t.ticketId) ticketMap.set(t.ticketId, t); });
-          fbTickets.forEach(t => { if (t && t.ticketId) ticketMap.set(t.ticketId, t); });
-          this.saveTickets(Array.from(ticketMap.values()));
-        }
-
-        // Merge payments non-destructively
-        if (fbPayments && Array.isArray(fbPayments) && fbPayments.length > 0) {
-          const currentPayments = this.getPayments();
-          const paymentMap = new Map<string, PaymentRecord>();
-          currentPayments.forEach(p => { if (p && p.paymentId) paymentMap.set(p.paymentId, p); });
-          fbPayments.forEach(p => { if (p && p.paymentId) paymentMap.set(p.paymentId, p); });
-          this.savePayments(Array.from(paymentMap.values()));
-        }
-
-        // Merge accounts from Firestore so locally registered & updated accounts are never wiped
-        if (fbAccounts && Array.isArray(fbAccounts) && fbAccounts.length > 0) {
-          const localAccs = this.getRegisteredAccounts();
-          const accMap = new Map<string, RegisteredAccount>();
-          localAccs.forEach(a => {
-            if (a && a.email) accMap.set(a.uid || a.email.toLowerCase().trim(), a);
-          });
-          fbAccounts.forEach(a => {
-            if (a && a.email) {
-              const key = a.uid || a.email.toLowerCase().trim();
-              const existing = accMap.get(key);
-              accMap.set(key, { ...existing, ...a });
-            }
-          });
-          this.saveRegisteredAccounts(Array.from(accMap.values()));
-        }
-        
-        // Payouts: Merge cloud and local payouts so settlements are never reset or lost
-        const localPayouts = this.getPayouts();
-        const payoutMap = new Map<string, PayoutRecord>();
-        for (const p of localPayouts) {
-          if (p && p.payoutId) payoutMap.set(p.payoutId, p);
-        }
-        for (const p of (fbPayouts || [])) {
-          if (p && p.payoutId) payoutMap.set(p.payoutId, p);
-        }
-        const mergedPayouts = Array.from(payoutMap.values()).sort(
-          (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
-        );
-        this.savePayouts(mergedPayouts);
-
-        // Upload any local settlements missing from Firestore to keep cloud database authoritative
-        if (fbPayouts && Array.isArray(fbPayouts)) {
-          const cloudIds = new Set(fbPayouts.map(p => p.payoutId));
-          for (const lp of localPayouts) {
-            if (!cloudIds.has(lp.payoutId)) {
-              FirebaseDbService.savePayout(lp).catch(() => {});
-            }
-          }
-        }
-      } catch (fbErr) {
-        console.warn('[Sync] Firestore sync warning:', fbErr);
       }
 
-      // 2. Always sync accounts & data from server database (/api/accounts & /api/sync)
+      // 2. Sync scoped state from server database (/api/sync?userId=...&userEmail=...&role=...)
+      let serverSyncOk = false;
+      let srvEvents: CollegeEvent[] = [];
+      let srvTickets: Ticket[] = [];
+      let srvPayouts: PayoutRecord[] = [];
+      let srvAccounts: RegisteredAccount[] = [];
+
       try {
-        const res = await fetch('/api/accounts');
+        const params = new URLSearchParams();
+        if (activeUid) params.set('userId', activeUid);
+        if (activeEmail) params.set('userEmail', activeEmail);
+        if (hasSession) params.set('role', activeRole);
+        const queryStr = params.toString();
+        const res = await fetch(queryStr ? `/api/sync?${queryStr}` : '/api/sync');
         if (res.ok) {
-          const serverAccounts: RegisteredAccount[] = await res.json();
-          if (Array.isArray(serverAccounts) && serverAccounts.length > 0) {
-            const currentAccs = this.getRegisteredAccounts();
-            const accMap = new Map<string, RegisteredAccount>();
-            currentAccs.forEach(a => {
-              if (a && a.email) accMap.set(a.uid || a.email.toLowerCase().trim(), a);
-            });
-            serverAccounts.forEach(a => {
-              if (a && a.email) {
-                const key = a.uid || a.email.toLowerCase().trim();
-                const existing = accMap.get(key);
-                accMap.set(key, { ...existing, ...a });
-              }
-            });
-            this.saveRegisteredAccounts(Array.from(accMap.values()));
-          }
+          serverSyncOk = true;
+          const syncData = await res.json();
+          if (Array.isArray(syncData.events)) srvEvents = syncData.events;
+          if (Array.isArray(syncData.tickets)) srvTickets = syncData.tickets;
+          if (Array.isArray(syncData.payouts)) srvPayouts = syncData.payouts;
+          if (Array.isArray(syncData.accounts)) srvAccounts = syncData.accounts;
         }
       } catch {}
-      try {
-        const res = await fetch('/api/sync');
-        if (res.ok) {
-          const syncData = await res.json();
-          if (Array.isArray(syncData.events) && syncData.events.length > 0) {
-            const currentEvents = this.getEvents();
-            const eventMap = new Map<string, CollegeEvent>();
-            currentEvents.forEach(e => { if (e && e.eventId) eventMap.set(e.eventId, e); });
-            syncData.events.forEach((e: CollegeEvent) => { if (e && e.eventId) eventMap.set(e.eventId, e); });
-            this.saveEvents(Array.from(eventMap.values()));
+
+      // Merge events cleanly: authoritative server/firestore + preserve un-flushed recent local edits + preserve host gatePins from local if stripped
+      const currentEvents = this.getEvents();
+      const eventMap = new Map<string, CollegeEvent>();
+      if (!serverSyncOk) {
+        currentEvents.forEach(e => { if (e?.eventId) eventMap.set(e.eventId, e); });
+      } else {
+        currentEvents.forEach(e => {
+          if (e?.eventId && this.isRecentMutation(e.eventId)) {
+            eventMap.set(e.eventId, e);
           }
-          if (Array.isArray(syncData.tickets) && syncData.tickets.length > 0) {
-            const currentTickets = this.getTickets();
-            const ticketMap = new Map<string, Ticket>();
-            currentTickets.forEach(t => { if (t && t.ticketId) ticketMap.set(t.ticketId, t); });
-            syncData.tickets.forEach((t: Ticket) => { if (t && t.ticketId) ticketMap.set(t.ticketId, t); });
-            this.saveTickets(Array.from(ticketMap.values()));
-          }
-          if (Array.isArray(syncData.accounts)) this.saveRegisteredAccounts(syncData.accounts);
-          if (Array.isArray(syncData.payouts) && syncData.payouts.length > 0) {
-            const current = this.getPayouts();
-            const pMap = new Map<string, PayoutRecord>();
-            current.forEach(p => pMap.set(p.payoutId, p));
-            syncData.payouts.forEach((p: PayoutRecord) => pMap.set(p.payoutId, p));
-            this.savePayouts(Array.from(pMap.values()));
-          }
-        }
-      } catch {
-        // safe fallback
+        });
       }
+      srvEvents.forEach(e => { if (e?.eventId) eventMap.set(e.eventId, e); });
+      fbEvents.forEach(e => {
+        if (e?.eventId) {
+          const prev = eventMap.get(e.eventId);
+          eventMap.set(e.eventId, prev ? { ...prev, ...e } : e);
+        }
+      });
+      this.saveEvents(Array.from(eventMap.values()), false);
+
+      // Strictly scope tickets to the logged-in user/host (zero cross-user leakage)
+      if (!hasSession) {
+        this.saveTickets([], false);
+        this.savePayouts([], false);
+      } else {
+        const currentTickets = this.getTickets();
+        const ticketMap = new Map<string, Ticket>();
+        if (!serverSyncOk) {
+          currentTickets.forEach(t => { if (t?.ticketId) ticketMap.set(t.ticketId, t); });
+        } else {
+          currentTickets.forEach(t => {
+            if (t?.ticketId && this.isRecentMutation(t.ticketId)) {
+              ticketMap.set(t.ticketId, t);
+            }
+          });
+        }
+        srvTickets.forEach(t => { if (t?.ticketId) ticketMap.set(t.ticketId, t); });
+        fbTickets.forEach(t => { if (t?.ticketId) ticketMap.set(t.ticketId, t); });
+        const sortedTickets = Array.from(ticketMap.values()).sort(
+          (a, b) => new Date(b.issuedAt || 0).getTime() - new Date(a.issuedAt || 0).getTime()
+        );
+        this.saveTickets(sortedTickets, false);
+
+        if (activeRole === 'host') {
+          const currentPayouts = this.getPayouts(activeUid);
+          const payoutMap = new Map<string, PayoutRecord>();
+          if (!serverSyncOk) {
+            currentPayouts.forEach(p => { if (p?.payoutId) payoutMap.set(p.payoutId, p); });
+          } else {
+            currentPayouts.forEach(p => {
+              if (p?.payoutId && this.isRecentMutation(p.payoutId)) {
+                payoutMap.set(p.payoutId, p);
+              }
+            });
+          }
+          srvPayouts.forEach(p => { if (p?.payoutId) payoutMap.set(p.payoutId, p); });
+          fbPayouts.forEach(p => { if (p?.payoutId) payoutMap.set(p.payoutId, p); });
+          const sortedPayouts = Array.from(payoutMap.values()).sort(
+            (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+          );
+          this.savePayouts(sortedPayouts, false);
+        } else {
+          this.savePayouts([], false);
+        }
+      }
+
+      // Merge sanitized account profile metadata without wiping existing password hashes
+      if (srvAccounts.length > 0) {
+        const localAccs = this.getRegisteredAccounts();
+        const accMap = new Map<string, RegisteredAccount>();
+        localAccs.forEach(a => {
+          if (a?.email) accMap.set(a.uid || a.email.toLowerCase().trim(), a);
+        });
+        srvAccounts.forEach(a => {
+          if (a?.email) {
+            const key = a.uid || a.email.toLowerCase().trim();
+            const existing = accMap.get(key);
+            accMap.set(key, { ...existing, ...a, password: existing?.password });
+          }
+        });
+        this.saveRegisteredAccounts(Array.from(accMap.values()));
+      }
+
+      window.dispatchEvent(new Event('campuspass_data_updated'));
 
       return {
         eventsCount: this.getEvents().length,
@@ -208,6 +300,113 @@ export class StorageService {
     }
   }
 
+  /**
+   * Starts true multi-tab (BroadcastChannel), cross-browser/server (SSE EventSource),
+   * and Firestore (onSnapshot) real-time synchronization for the active session.
+   */
+  static startRealtimeSync(
+    session: SyncSession | null,
+    onDataChanged: () => void
+  ): () => void {
+    if (typeof window === 'undefined') return () => {};
+
+    let disposed = false;
+    let channel: BroadcastChannel | null = null;
+    let eventSource: EventSource | null = null;
+    let unsubEvents: (() => void) | null = null;
+    let unsubTickets: (() => void) | null = null;
+    let unsubPayouts: (() => void) | null = null;
+
+    const triggerSync = () => {
+      if (disposed) return;
+      this.syncFromCloud(session).then(() => {
+        if (!disposed) onDataChanged();
+      });
+    };
+
+    // 1. Cross-tab instant synchronization via BroadcastChannel
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel(REALTIME_CHANNEL_NAME);
+        channel.onmessage = () => {
+          if (!disposed) {
+            triggerSync();
+          }
+        };
+      }
+    } catch {}
+
+    // 2. Live Server-Sent Events stream from backend API
+    try {
+      if (typeof EventSource !== 'undefined') {
+        eventSource = new EventSource('/api/realtime/stream');
+        eventSource.onmessage = (evt) => {
+          if (disposed) return;
+          try {
+            const data = JSON.parse(evt.data || '{}');
+            if (data.type && data.type !== 'connected') {
+              triggerSync();
+            }
+          } catch {}
+        };
+      }
+    } catch {}
+
+    // 3. Real-time Firestore onSnapshot listeners when signed in via Firebase Auth
+    const fbUid = FirebaseDbService.getActiveFirebaseUid();
+    if (session?.uid && fbUid && fbUid === session.uid) {
+      unsubEvents = FirebaseDbService.subscribeEvents(session.uid, (liveEvents) => {
+        if (disposed) return;
+        const current = this.getEvents();
+        const map = new Map<string, CollegeEvent>();
+        current.forEach(e => { if (e?.eventId) map.set(e.eventId, e); });
+        liveEvents.forEach(e => { if (e?.eventId) map.set(e.eventId, e); });
+        this.saveEvents(Array.from(map.values()), false);
+        window.dispatchEvent(new Event('campuspass_data_updated'));
+        onDataChanged();
+      });
+
+      if (session.role === 'host') {
+        unsubTickets = FirebaseDbService.subscribeHostTickets(session.uid, (liveTickets) => {
+          if (disposed) return;
+          const current = this.getTickets();
+          const map = new Map<string, Ticket>();
+          current.forEach(t => { if (t?.ticketId) map.set(t.ticketId, t); });
+          liveTickets.forEach(t => { if (t?.ticketId) map.set(t.ticketId, t); });
+          this.saveTickets(Array.from(map.values()), false);
+          window.dispatchEvent(new Event('campuspass_data_updated'));
+          onDataChanged();
+        });
+        unsubPayouts = FirebaseDbService.subscribeHostPayouts(session.uid, (livePayouts) => {
+          if (disposed) return;
+          this.savePayouts(livePayouts, false);
+          window.dispatchEvent(new Event('campuspass_data_updated'));
+          onDataChanged();
+        });
+      } else {
+        unsubTickets = FirebaseDbService.subscribeUserTickets(session.uid, (liveTickets) => {
+          if (disposed) return;
+          const current = this.getTickets();
+          const map = new Map<string, Ticket>();
+          current.forEach(t => { if (t?.ticketId) map.set(t.ticketId, t); });
+          liveTickets.forEach(t => { if (t?.ticketId) map.set(t.ticketId, t); });
+          this.saveTickets(Array.from(map.values()), false);
+          window.dispatchEvent(new Event('campuspass_data_updated'));
+          onDataChanged();
+        });
+      }
+    }
+
+    return () => {
+      disposed = true;
+      try { channel?.close(); } catch {}
+      try { eventSource?.close(); } catch {}
+      try { unsubEvents?.(); } catch {}
+      try { unsubTickets?.(); } catch {}
+      try { unsubPayouts?.(); } catch {}
+    };
+  }
+
   /** Backward-compatible alias for existing call sites */
   static async syncFromFirestore(): Promise<{ eventsCount: number; ticketsCount: number }> {
     return this.syncFromCloud();
@@ -221,36 +420,25 @@ export class StorageService {
     }
     try {
       const parsed: CollegeEvent[] = JSON.parse(raw);
-      // Clean out any legacy mock events if they exist
-      const cleaned = parsed.filter(e => 
-        !e.eventId.startsWith('evt-tech-fest-2026') && 
-        !e.eventId.startsWith('evt-tech-summit-2025') && 
-        !e.eventId.startsWith('evt-cultural-night') && 
-        !e.eventId.startsWith('evt-esports-championship') && 
-        !e.eventId.startsWith('evt-ai-workshop') && 
+      return parsed.filter(e =>
+        e && e.eventId &&
+        !e.eventId.startsWith('evt-tech-fest-2026') &&
+        !e.eventId.startsWith('evt-tech-summit-2025') &&
+        !e.eventId.startsWith('evt-cultural-night') &&
+        !e.eventId.startsWith('evt-esports-championship') &&
+        !e.eventId.startsWith('evt-ai-workshop') &&
         !e.eventId.startsWith('evt-inter-college-derby') &&
         !e.eventId.startsWith('evt-muefnnqg-duty')
-      ).map(e => {
-        if (!e.gatePin) {
-          // Generate stable deterministic 6-digit gate PIN based on eventId
-          const hash = Math.abs(e.eventId.split('').reduce((acc, c) => ((acc << 5) - acc) + c.charCodeAt(0), 0));
-          e.gatePin = ((hash % 900000) + 100000).toString();
-        }
-        return e;
-      });
-      if (cleaned.length !== parsed.length) {
-        this.saveEvents(cleaned);
-      }
-      return cleaned;
+      );
     } catch {
       return [];
     }
   }
 
-  static saveEvents(events: CollegeEvent[]): void {
+  static saveEvents(events: CollegeEvent[], broadcast = true): void {
     localStorage.setItem(STORAGE_KEYS.EVENTS, JSON.stringify(events));
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('campuspass_data_updated'));
+    if (broadcast) {
+      broadcastTabUpdate('events');
     }
   }
 
@@ -286,6 +474,7 @@ export class StorageService {
       updatedAt: new Date().toISOString(),
     };
     events.unshift(newEvent);
+    this.markMutation(newEvent.eventId);
     this.saveEvents(events);
 
     // 1. Persist to Cloud Server Database API
@@ -333,6 +522,7 @@ export class StorageService {
     }
 
     events[idx] = updated;
+    this.markMutation(eventId);
     this.saveEvents(events);
 
     // 1. Sync to Cloud Server API
@@ -466,16 +656,17 @@ export class StorageService {
     if (changed) this.saveTickets(tickets);
   }
 
-  static saveTickets(tickets: Ticket[]): void {
+  static saveTickets(tickets: Ticket[], broadcast = true): void {
     localStorage.setItem(STORAGE_KEYS.TICKETS, JSON.stringify(tickets));
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('campuspass_data_updated'));
+    if (broadcast) {
+      broadcastTabUpdate('tickets');
     }
   }
 
   static saveNewTicket(ticket: Ticket): void {
     const tickets = this.getTickets();
     tickets.unshift(ticket);
+    this.markMutation(ticket.ticketId);
     this.saveTickets(tickets);
 
     // 1. Sync to Cloud Server API
@@ -490,6 +681,7 @@ export class StorageService {
   }
 
   static getUserTickets(userId: string, userEmail?: string): Ticket[] {
+    if (!userId && !userEmail) return [];
     const cleanEmail = userEmail?.toLowerCase().trim();
     return this.getTickets().filter(t => {
       if (userId && t.userId === userId) return true;
@@ -503,15 +695,17 @@ export class StorageService {
   }
 
   static getHostAttendees(hostId: string, hostEmail?: string): Ticket[] {
-    const cleanEmail = hostEmail?.toLowerCase().trim();
+    const cleanId = hostId ? hostId.trim() : '';
+    const cleanEmail = hostEmail ? hostEmail.toLowerCase().trim() : '';
+    if (!cleanId && !cleanEmail) return [];
     const events = this.getEvents();
     const hostEventIds = new Set(
       events
-        .filter(e => (hostId && e.hostId === hostId) || (cleanEmail && e.hostEmail && e.hostEmail.toLowerCase().trim() === cleanEmail))
+        .filter(e => (cleanId && e.hostId === cleanId) || (cleanEmail && e.hostEmail && e.hostEmail.toLowerCase().trim() === cleanEmail))
         .map(e => e.eventId)
     );
     return this.getTickets().filter(t => {
-      if (hostId && t.hostId === hostId) return true;
+      if (cleanId && t.hostId === cleanId) return true;
       if (hostEventIds.has(t.eventId)) return true;
       return false;
     });
@@ -525,6 +719,7 @@ export class StorageService {
     if (!organizerId && !organizerEmail) return [];
     const cleanId = organizerId ? organizerId.trim() : '';
     const cleanEmail = organizerEmail ? organizerEmail.toLowerCase().trim() : '';
+    if (!cleanId && !cleanEmail) return [];
     const hostEvents = this.getHostEvents(cleanId, cleanEmail);
     const hostEventIds = new Set(hostEvents.map(e => e.eventId));
     return this.getTickets().filter(t => {
@@ -615,6 +810,103 @@ export class StorageService {
     const event = events.find(e => e.gatePin === cleanPin);
     if (!event || event.status === 'cancelled') return null;
     return event;
+  }
+
+  static async validateVolunteerGatePinAsync(gatePin: string): Promise<CollegeEvent | null> {
+    if (!gatePin) return null;
+    const cleanPin = gatePin.trim();
+    if (cleanPin.length !== 6) return null;
+    try {
+      const res = await fetch(`/api/volunteer/validate-pin?pin=${encodeURIComponent(cleanPin)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.valid && data?.event) {
+          return data.event as CollegeEvent;
+        }
+      } else if (res.status === 404 || res.status === 400) {
+        return null;
+      }
+    } catch {}
+    return this.validateVolunteerGatePin(cleanPin);
+  }
+
+  static async fetchVolunteerEventEntriesAsync(eventId: string, gatePin: string): Promise<Ticket[]> {
+    if (!eventId || !gatePin || gatePin.trim().length !== 6) return [];
+    try {
+      const res = await fetch(`/api/volunteer/tickets?eventId=${encodeURIComponent(eventId)}&pin=${encodeURIComponent(gatePin.trim())}`);
+      if (res.ok) {
+        const rows = await res.json();
+        if (Array.isArray(rows)) return rows as Ticket[];
+      }
+    } catch {}
+    return this.getTickets()
+      .filter(t => t.eventId === eventId && t.entryStatus === 'entered')
+      .sort((a, b) => {
+        const tb = b.entryTimestamp ? new Date(b.entryTimestamp).getTime() : 0;
+        const ta = a.entryTimestamp ? new Date(a.entryTimestamp).getTime() : 0;
+        return tb - ta;
+      });
+  }
+
+  static async verifyVolunteerScanAsync(
+    qrToken: string,
+    gatePin: string,
+    targetEventId: string
+  ): Promise<ScannerScanResult> {
+    const cleanToken = (qrToken || '').trim();
+    const cleanPin = (gatePin || '').trim();
+    if (!cleanToken) {
+      return { success: false, message: 'QR Token or Ticket ID is required.', code: 'INVALID_TOKEN' };
+    }
+    try {
+      const res = await fetch('/api/tickets/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          qrToken: cleanToken,
+          volunteerGatePin: cleanPin,
+          eventId: targetEventId,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (data && typeof data.success === 'boolean') {
+        if (data.success && data.ticket) {
+          broadcastTabUpdate('tickets');
+        }
+        return {
+          success: data.success,
+          message: data.message || data.error || 'Verification completed.',
+          ticket: data.ticket,
+          code: data.code,
+        };
+      }
+    } catch {}
+    return this.verifyVolunteerScan(cleanToken, cleanPin, targetEventId);
+  }
+
+  static async authenticateCredentialAsync(
+    identifier: string,
+    password: string,
+    role?: 'user' | 'host'
+  ): Promise<{ success: boolean; notFound?: boolean; error?: string; account?: RegisteredAccount }> {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, password, role }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success && data.account) {
+        return { success: true, account: data.account as RegisteredAccount };
+      }
+      if (res.status === 404 || data?.code === 'NOT_FOUND') {
+        return { success: false, notFound: true, error: data?.error };
+      }
+      if (data && data.error) {
+        return { success: false, error: data.error };
+      }
+    } catch {}
+    return { success: false, notFound: true };
   }
 
   /**
@@ -902,9 +1194,14 @@ export class StorageService {
     return { success: true, message: 'Ticket cancelled successfully. Pass has been revoked.', ticket };
   }
 
-  // Bookmarks / Wishlist
+  // Bookmarks / Wishlist (scoped per active user)
+  private static getBookmarkStorageKey(): string {
+    const activeUid = typeof window !== 'undefined' ? localStorage.getItem(ACTIVE_UID_KEY) : null;
+    return activeUid ? `${STORAGE_KEYS.BOOKMARKS}_${activeUid}` : STORAGE_KEYS.BOOKMARKS;
+  }
+
   static getBookmarks(): string[] {
-    const raw = localStorage.getItem(STORAGE_KEYS.BOOKMARKS);
+    const raw = localStorage.getItem(this.getBookmarkStorageKey());
     if (!raw) return [];
     try {
       return JSON.parse(raw);
@@ -922,7 +1219,7 @@ export class StorageService {
     } else {
       updated = [...bookmarks, eventId];
     }
-    localStorage.setItem(STORAGE_KEYS.BOOKMARKS, JSON.stringify(updated));
+    localStorage.setItem(this.getBookmarkStorageKey(), JSON.stringify(updated));
     return updated;
   }
 
@@ -1397,11 +1694,11 @@ export class StorageService {
     }
   }
 
-  static savePayouts(payouts: PayoutRecord[]): void {
+  static savePayouts(payouts: PayoutRecord[], broadcast = true): void {
     localStorage.setItem(STORAGE_KEYS.PAYOUTS, JSON.stringify(payouts));
-    try {
-      window.dispatchEvent(new Event('campuspass_data_updated'));
-    } catch {}
+    if (broadcast) {
+      broadcastTabUpdate('payouts');
+    }
   }
 
   static savePayoutRecord(payout: PayoutRecord): void {
@@ -1412,6 +1709,7 @@ export class StorageService {
     } else {
       payouts.unshift(payout);
     }
+    this.markMutation(payout.payoutId);
     this.savePayouts(payouts);
 
     // Sync to Firestore Cloud database immediately
@@ -1435,6 +1733,7 @@ export class StorageService {
     };
 
     payouts.unshift(newPayout);
+    this.markMutation(newPayout.payoutId);
     this.savePayouts(payouts);
 
     // 1. Sync to Cloud API

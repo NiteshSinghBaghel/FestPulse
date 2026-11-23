@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Ticket, ScannerScanResult } from '../types';
 import { StorageService } from '../services/storageService';
 import { 
@@ -35,9 +35,24 @@ export const ManualVerifyModal: React.FC<ManualVerifyModalProps> = ({
   const [tokenInput, setTokenInput] = useState('');
   const [result, setResult] = useState<ScannerScanResult | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
-  const [recentEnteredTickets, setRecentEnteredTickets] = useState<Ticket[]>(() => {
-    return StorageService.getTickets().filter(t => t.entryStatus === 'entered').slice(0, 5);
-  });
+  const [recentEnteredTickets, setRecentEnteredTickets] = useState<Ticket[]>([]);
+
+  useEffect(() => {
+    if (!isOpen || (!hostId && !hostEmail)) {
+      setRecentEnteredTickets([]);
+      return;
+    }
+    const loadHostEntered = () => {
+      const entered = StorageService.getHostTickets(hostId, hostEmail)
+        .filter(t => t.entryStatus === 'entered')
+        .sort((a, b) => new Date(b.entryTimestamp || 0).getTime() - new Date(a.entryTimestamp || 0).getTime())
+        .slice(0, 5);
+      setRecentEnteredTickets(entered);
+    };
+    loadHostEntered();
+    window.addEventListener('campuspass_data_updated', loadHostEntered);
+    return () => window.removeEventListener('campuspass_data_updated', loadHostEntered);
+  }, [isOpen, hostId, hostEmail]);
 
   if (!isOpen) return null;
 

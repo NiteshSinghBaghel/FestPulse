@@ -9,6 +9,8 @@ import {
   firebaseVerifyPasswordResetCode,
   firebaseLoginWithEmail,
   firebaseRegisterWithEmail,
+  signInWithGooglePopup as firebaseGooglePopup,
+  firebaseLogout,
   getFirebaseErrorMessage, 
   isFirebaseInitialized 
 } from '../services/firebase';
@@ -50,21 +52,32 @@ let memoizedSession: UserProfile | null = null;
 let memoizedJwtToken: string | null = null;
 let memoizedIsVerified = false;
 
-// Fast synchronous memoized session getter (0ms)
+// Fast synchronous memoized session getter (0ms) with strict schema validation
 function getMemoizedSession(): UserProfile | null {
   if (memoizedSession) return memoizedSession;
   try {
     const saved = localStorage.getItem(AUTH_STORAGE_KEY);
     if (saved) {
       const parsed: UserProfile = JSON.parse(saved);
-      if (parsed?.email?.includes('@campus.edu')) {
+      const isValidUser = Boolean(
+        parsed &&
+        typeof parsed.uid === 'string' &&
+        parsed.uid.trim().length > 0 &&
+        typeof parsed.email === 'string' &&
+        parsed.email.includes('@') &&
+        (parsed.role === 'user' || parsed.role === 'host')
+      );
+      if (!isValidUser || parsed?.email?.includes('@campus.edu')) {
         localStorage.removeItem(AUTH_STORAGE_KEY);
+        StorageService.clearUserScopedCache();
         return null;
       }
+      StorageService.ensureActiveUserScope(parsed.uid);
       memoizedSession = parsed;
       return parsed;
     }
   } catch {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
     return null;
   }
   return null;
@@ -120,19 +133,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Validate stored JWT token signature in background without delaying initial render
   useEffect(() => {
     const verifyInitialSession = async () => {
+      const rawTokenPresent = Boolean(
+        localStorage.getItem('campuspass_jwt_token') || localStorage.getItem('festplus_jwt_token')
+      );
       const stored = await JwtService.getVerifiedStoredToken();
-      if (stored) {
+      if (stored && currentUser) {
+        if (stored.payload.sub !== currentUser.uid) {
+          // Token belongs to another account: invalidate immediately
+          logout();
+          return;
+        }
         memoizedJwtToken = stored.token;
         memoizedIsVerified = true;
         setJwtToken(stored.token);
         setIsTokenVerified(true);
-        if (currentUser && !currentUser.token) {
+        if (!currentUser.token) {
           const updated = { ...currentUser, token: stored.token };
           memoizedSession = updated;
           setCurrentUser(updated);
           localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updated));
         }
       } else if (currentUser) {
+        if (rawTokenPresent) {
+          // Stored JWT existed but failed signature or expired: force clean logout
+          logout();
+          return;
+        }
         const freshToken = await JwtService.createToken({
           uid: currentUser.uid,
           email: currentUser.email,
@@ -156,6 +182,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     if (currentUser) {
+      StorageService.ensureActiveUserScope(currentUser.uid);
       memoizedSession = currentUser;
       localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(currentUser));
     } else {
@@ -163,6 +190,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       memoizedJwtToken = null;
       memoizedIsVerified = false;
       localStorage.removeItem(AUTH_STORAGE_KEY);
+      StorageService.clearUserScopedCache();
       JwtService.clearToken();
       setJwtToken(null);
       setIsTokenVerified(false);
@@ -262,7 +290,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: new Date().toISOString(),
       };
 
-      // 3. Save profile to Firestore and sync
+      // 3. Switch user cache scope before saving session & syncing
+      StorageService.ensureActiveUserScope(uid);
       FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
 
       memoizedSession = userProfile;
@@ -297,17 +326,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      // 1. FAST PATH: Check local cache first (0ms instantaneous lookup)
-      let account = StorageService.findAccountByIdentifier(rawIdentifier);
+      let account: RegisteredAccount | undefined;
+      let passwordMatched = false;
 
-      // Check if local account matched password directly
-      let passwordMatched = account ? (!account.password || account.password === password) : false;
-
-      // 2. If not found locally or password didn't match, query fresh from server API / cloud
-      if (!account || !passwordMatched) {
+      // 1. Authoritative server-side credential check (/api/auth/login)
+      const serverAuth = await StorageService.authenticateCredentialAsync(rawIdentifier, password, selectedRole);
+      if (serverAuth.success && serverAuth.account) {
+        account = serverAuth.account;
+        passwordMatched = true;
+      } else if (!serverAuth.notFound && serverAuth.error) {
+        // Explicit server rejection (wrong password, etc.)
+        // Still allow Firebase Auth verification fallback in case user reset password via Firebase email
         account = await StorageService.findAccountByIdentifierAsync(rawIdentifier, true);
-        if (account) {
-          passwordMatched = !account.password || account.password === password;
+      }
+
+      // 2. Fallback lookup in local cache if server was unreachable
+      if (!account) {
+        account = StorageService.findAccountByIdentifier(rawIdentifier) || await StorageService.findAccountByIdentifierAsync(rawIdentifier, true);
+        if (account && account.password && account.password === password) {
+          passwordMatched = true;
+        }
+      }
+
+      // 3. Firebase Auth verification (supports users created in Firebase Auth or Android app)
+      if (!passwordMatched && isFirebaseInitialized && isEmail) {
+        try {
+          const fbPromise = firebaseLoginWithEmail(rawIdentifier.toLowerCase(), password);
+          const timeoutPromise = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500));
+          const cred = await Promise.race([fbPromise, timeoutPromise]);
+          passwordMatched = true;
+          const fbUser = cred.user;
+          if (!account && fbUser) {
+            const fbProfile = await FirebaseDbService.getUserProfile(fbUser.uid);
+            account = {
+              uid: fbUser.uid,
+              name: fbProfile?.name || fbUser.displayName || rawIdentifier.split('@')[0],
+              email: (fbUser.email || rawIdentifier).toLowerCase().trim(),
+              role: fbProfile?.role || selectedRole,
+              college: fbProfile?.college || '',
+              phone: fbProfile?.phone || '',
+              photoURL: fbProfile?.photoURL || fbUser.photoURL || '',
+              authProvider: 'email',
+              password,
+              createdAt: fbProfile?.createdAt || new Date().toISOString(),
+            };
+            await StorageService.saveAccountAsync(account);
+          } else if (account) {
+            StorageService.updateAccountPasswordAsync(account.email, password, account.role, account.name).catch(() => {});
+          }
+        } catch (fbErr: any) {
+          console.warn('[Firebase direct login check]:', fbErr?.code);
         }
       }
 
@@ -320,34 +388,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
       }
 
-      // If local/server password didn't match, also test Firebase Auth if initialized with timeout
-      if (!passwordMatched && isFirebaseInitialized && account.email) {
-        try {
-          const fbPromise = firebaseLoginWithEmail(account.email, password);
-          const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500));
-          await Promise.race([fbPromise, timeoutPromise]);
-          // If Firebase Auth accepted it, sync the new password across all database layers in background
-          passwordMatched = true;
-          StorageService.updateAccountPasswordAsync(account.email, password, selectedRole, account.name).catch(() => {});
-          account.password = password;
-        } catch (fbErr: any) {
-          console.warn('[Firebase direct login check]:', fbErr?.code);
-        }
-      }
-
       if (!passwordMatched) {
         return {
           success: false,
-          error: 'Incorrect password. Please verify your credentials or reset your password.',
+          error: serverAuth.error || 'Incorrect password. Please verify your credentials or reset your password.',
         };
       }
+
+      // Strict Portal Role Check: keep student & organizer logins cleanly separated
+      if (account.role && account.role !== selectedRole) {
+        const expectedPortal = account.role === 'host' ? 'Host / Organizer' : 'Student';
+        return {
+          success: false,
+          error: `"${account.email}" is registered as a ${expectedPortal} account. Please switch to the ${expectedPortal} login portal.`,
+        };
+      }
+
+      const resolvedRole: UserRole = account.role || selectedRole;
 
       // Mint HMAC-SHA256 JWT Token
       const token = await JwtService.createToken({
         uid: account.uid,
         email: account.email,
         name: account.name,
-        role: selectedRole,
+        role: resolvedRole,
       });
 
       JwtService.saveToken(token);
@@ -358,8 +422,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         uid: account.uid,
         name: account.name,
         email: account.email,
-        role: selectedRole,
-        college: account.college || (selectedRole === 'host' ? 'Campus Event Council' : 'College Student'),
+        role: resolvedRole,
+        college: account.college || (resolvedRole === 'host' ? 'Campus Event Council' : 'College Student'),
         phone: account.phone || '',
         photoURL: account.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(account.name)}`,
         authProvider: account.authProvider || 'email',
@@ -368,9 +432,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: account.updatedAt || new Date().toISOString(),
       };
 
-      // Update role & sync
-      account.role = selectedRole;
-      StorageService.saveAccount(account);
+      // Switch user cache scope before syncing & rendering dashboard
+      StorageService.ensureActiveUserScope(userProfile.uid);
       FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
 
       memoizedSession = userProfile;
@@ -448,6 +511,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: new Date().toISOString(),
       });
 
+      StorageService.ensureActiveUserScope(userProfile.uid);
       FirebaseDbService.saveUserProfile(userProfile).catch(() => {});
       memoizedSession = userProfile;
       memoizedJwtToken = token;
@@ -464,8 +528,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     college?: string,
     phone?: string
   ) => {
-    const demoEmail = 'guest@festplus.com';
-    return loginWithGoogle('Guest User', demoEmail, selectedRole, undefined, undefined, college, phone);
+    try {
+      if (!isFirebaseInitialized) {
+        return { success: false, error: 'Google Sign-In is not initialized. Please check Firebase config.' };
+      }
+      const cred = await firebaseGooglePopup();
+      const user = cred.user;
+      if (!user || !user.email) {
+        return { success: false, error: 'Google account did not return a verified email address.' };
+      }
+      return loginWithGoogle(
+        user.displayName || user.email.split('@')[0],
+        user.email,
+        selectedRole,
+        user.photoURL || undefined,
+        user.uid,
+        college,
+        phone
+      );
+    } catch (err: any) {
+      return { success: false, error: getFirebaseErrorMessage(err) };
+    }
   };
 
   // Sign out
@@ -474,10 +557,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     memoizedJwtToken = null;
     memoizedIsVerified = false;
     JwtService.clearToken();
+    StorageService.clearUserScopedCache();
+    firebaseLogout().catch(() => {});
     setJwtToken(null);
     setIsTokenVerified(false);
     setCurrentUser(null);
     localStorage.removeItem(AUTH_STORAGE_KEY);
+    localStorage.removeItem('festplus_jwt_token');
   };
 
   // Update profile

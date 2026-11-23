@@ -80,7 +80,10 @@ export const HomePage: React.FC<HomePageProps> = ({
   }, []);
 
   useEffect(() => {
-    setBookmarks(StorageService.getBookmarks());
+    const syncBookmarks = () => setBookmarks(StorageService.getBookmarks());
+    syncBookmarks();
+    window.addEventListener('campuspass_data_updated', syncBookmarks);
+    return () => window.removeEventListener('campuspass_data_updated', syncBookmarks);
   }, []);
 
   useEffect(() => {
@@ -90,15 +93,16 @@ export const HomePage: React.FC<HomePageProps> = ({
     }
   }, [focusSearchTrigger]);
 
-  const handleManualRefresh = () => {
+  const handleManualRefresh = async () => {
     setIsRefreshing(true);
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      setIsRefreshing(false);
+    try {
+      await StorageService.syncFromCloud();
       const now = new Date();
       setLastRefreshedTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    }, 700);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
   };
 
   const handleToggleBookmark = (eventId: string) => {

@@ -116,7 +116,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
     }
   };
 
-  // Direct Auto Camera Start on mount
+  // Direct Auto Camera Start on mount + real-time entries subscription
   useEffect(() => {
     if (isOpen) {
       isScanningActiveRef.current = true;
@@ -126,6 +126,19 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
       if (prefilledTicket) {
         processToken(prefilledTicket.qrToken);
       }
+
+      const handleRealtimeUpdate = () => loadRecentEntries();
+      window.addEventListener('campuspass_data_updated', handleRealtimeUpdate);
+      window.addEventListener('storage', handleRealtimeUpdate);
+
+      return () => {
+        window.removeEventListener('campuspass_data_updated', handleRealtimeUpdate);
+        window.removeEventListener('storage', handleRealtimeUpdate);
+        stopCamera();
+        if (feedbackTimeoutRef.current) {
+          clearTimeout(feedbackTimeoutRef.current);
+        }
+      };
     } else {
       stopCamera();
       if (feedbackTimeoutRef.current) {
@@ -141,7 +154,7 @@ export const QrScannerModal: React.FC<QrScannerModalProps> = ({
         clearTimeout(feedbackTimeoutRef.current);
       }
     };
-  }, [isOpen, prefilledTicket]);
+  }, [isOpen, prefilledTicket, currentUser?.uid, currentUser?.email]);
 
   const startCamera = async (targetFacingMode?: 'environment' | 'user') => {
     stopCamera();

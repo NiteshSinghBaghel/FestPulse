@@ -82,39 +82,51 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
 
   // Pre-fill initial PIN if passed
   useEffect(() => {
-    if (initialGatePin && initialGatePin.trim().length === 6) {
-      setGatePinInput(initialGatePin.trim());
-      handleValidatePin(initialGatePin.trim());
+    if (isOpen && initialGatePin && initialGatePin.trim().length === 6) {
+      const pin = initialGatePin.trim();
+      setGatePinInput(pin);
+      void handleValidatePin(pin);
     }
   }, [initialGatePin, isOpen]);
 
-  // Load recent entries for the active event
-  const loadEventEntries = (eventId: string) => {
-    const all = StorageService.getTickets();
-    const eventEntries = all
-      .filter(t => t.eventId === eventId && t.entryStatus === 'entered')
-      .sort((a, b) => {
-        const timeB = b.entryTimestamp ? new Date(b.entryTimestamp).getTime() : 0;
-        const timeA = a.entryTimestamp ? new Date(a.entryTimestamp).getTime() : 0;
-        if (timeB !== timeA) return timeB - timeA;
-        return (b.entryTime || '').localeCompare(a.entryTime || '');
-      });
-    setRecentGateEntries(eventEntries);
+  // Load recent entries for the active event via scoped volunteer endpoint
+  const loadEventEntries = async (eventId: string, pinOverride?: string) => {
+    const pin = (pinOverride || activeEvent?.gatePin || gatePinInput || '').trim();
+    if (!eventId || pin.length !== 6) return;
+    const entries = await StorageService.fetchVolunteerEventEntriesAsync(eventId, pin);
+    setRecentGateEntries(entries);
   };
 
-  // Listen to background sync updates
+  // Listen to background sync, SSE stream & BroadcastChannel updates while scanner is open
   useEffect(() => {
-    if (activeEvent) {
-      loadEventEntries(activeEvent.eventId);
-    }
+    if (!isOpen || !activeEvent) return;
+    void loadEventEntries(activeEvent.eventId, activeEvent.gatePin || gatePinInput);
+
     const handleUpdate = () => {
-      if (activeEvent) {
-        loadEventEntries(activeEvent.eventId);
-      }
+      void loadEventEntries(activeEvent.eventId, activeEvent.gatePin || gatePinInput);
     };
     window.addEventListener('campuspass_data_updated', handleUpdate);
-    return () => window.removeEventListener('campuspass_data_updated', handleUpdate);
-  }, [activeEvent]);
+
+    let es: EventSource | null = null;
+    try {
+      if (typeof EventSource !== 'undefined') {
+        es = new EventSource('/api/realtime/stream');
+        es.onmessage = (evt) => {
+          try {
+            const payload = JSON.parse(evt.data || '{}');
+            if (payload.type === 'tickets' || payload.type === 'reset') {
+              void loadEventEntries(activeEvent.eventId, activeEvent.gatePin || gatePinInput);
+            }
+          } catch {}
+        };
+      }
+    } catch {}
+
+    return () => {
+      window.removeEventListener('campuspass_data_updated', handleUpdate);
+      try { es?.close(); } catch {}
+    };
+  }, [isOpen, activeEvent?.eventId]);
 
   // Sound effects
   const playSound = (type: 'success' | 'error') => {
@@ -148,8 +160,8 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
     } catch {}
   };
 
-  // Validate the entered 6-digit gate PIN
-  const handleValidatePin = (pinToTest?: string) => {
+  // Validate the entered 6-digit gate PIN via server & local cache
+  const handleValidatePin = async (pinToTest?: string) => {
     setPinError('');
     const target = (pinToTest || gatePinInput).trim();
     if (target.length !== 6) {
@@ -157,7 +169,7 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
       return;
     }
 
-    const matchedEvent = StorageService.validateVolunteerGatePin(target);
+    const matchedEvent = await StorageService.validateVolunteerGatePinAsync(target);
     if (!matchedEvent) {
       setPinError('Invalid or inactive Gate PIN. Please ask your organizer for the active 6-digit code.');
       setActiveEvent(null);
@@ -166,7 +178,7 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
 
     setActiveEvent(matchedEvent);
     setPinError('');
-    loadEventEntries(matchedEvent.eventId);
+    await loadEventEntries(matchedEvent.eventId, matchedEvent.gatePin || target);
   };
 
   // Start camera when activeEvent is established and modal is open
@@ -276,14 +288,15 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
     animationFrameRef.current = requestAnimationFrame(scanFrame);
   };
 
-  // Process the QR token or ticket ID through volunteer gate logic
-  const processToken = (token: string) => {
+  // Process the QR token or ticket ID through server-verified volunteer gate logic
+  const processToken = async (token: string) => {
     if (!token.trim() || !activeEvent) return;
     setIsProcessing(true);
 
-    const result: ScannerScanResult = StorageService.verifyVolunteerScan(
+    const activePin = activeEvent.gatePin || gatePinInput;
+    const result: ScannerScanResult = await StorageService.verifyVolunteerScanAsync(
       token.trim(),
-      activeEvent.gatePin || gatePinInput,
+      activePin,
       activeEvent.eventId
     );
     setIsProcessing(false);
@@ -293,7 +306,7 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
     }
 
     // Refresh event entries
-    loadEventEntries(activeEvent.eventId);
+    await loadEventEntries(activeEvent.eventId, activePin);
 
     if (result.code === 'WRONG_HOST_OR_EVENT') {
       playSound('error');

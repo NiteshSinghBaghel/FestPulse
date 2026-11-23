@@ -12,11 +12,11 @@ interface FooterProps {
   role?: 'user' | 'host';
 }
 
-export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
+export const Footer: React.FC<FooterProps> = ({ onNavigate, role = 'user' }) => {
   return (
     <footer className="w-full bg-slate-900 text-slate-300 border-t border-slate-800 mt-auto transition-colors">
       <div className="w-full px-4 sm:px-6 lg:px-10 xl:px-12 py-12 lg:py-16">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 lg:gap-12 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 lg:gap-12 mb-12">
           
           {/* Brand Col */}
           <div className="lg:col-span-2 space-y-4">
@@ -44,59 +44,55 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
             </div>
           </div>
 
-          {/* Quick Links */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-black uppercase tracking-wider text-white">Explore Events</h3>
-            <ul className="space-y-2 text-xs text-slate-400">
-              <li>
-                <button onClick={() => onNavigate && onNavigate('home')} className="hover:text-indigo-400 transition">
-                  Campus Fests & Cultural
-                </button>
-              </li>
-              <li>
-                <button onClick={() => onNavigate && onNavigate('home')} className="hover:text-indigo-400 transition">
-                  Hackathons & Tech Summits
-                </button>
-              </li>
-              <li>
-                <button onClick={() => onNavigate && onNavigate('home')} className="hover:text-indigo-400 transition">
-                  Inter-College Sports Derby
-                </button>
-              </li>
-              <li>
-                <button onClick={() => onNavigate && onNavigate('home')} className="hover:text-indigo-400 transition">
-                  Music Concerts & EDM
-                </button>
-              </li>
-            </ul>
-          </div>
-
-          {/* Platform & Host */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-black uppercase tracking-wider text-white">Host & Councils</h3>
-            <ul className="space-y-2 text-xs text-slate-400">
-              <li>
-                <button onClick={() => onNavigate && onNavigate('host-dashboard')} className="hover:text-amber-400 transition">
-                  Organizer Dashboard
-                </button>
-              </li>
-              <li>
-                <button onClick={() => onNavigate && onNavigate('host-events')} className="hover:text-amber-400 transition">
-                  Manage Published Events
-                </button>
-              </li>
-              <li>
-                <button onClick={() => onNavigate && onNavigate('host-attendees')} className="hover:text-amber-400 transition">
-                  Gate Entrance Ledger
-                </button>
-              </li>
-              <li>
-                <button onClick={() => onNavigate && onNavigate('host-analytics')} className="hover:text-amber-400 transition">
-                  Revenue & UPI Settlements
-                </button>
-              </li>
-            </ul>
-          </div>
+          {/* Role-Scoped Navigation Column */}
+          {role === 'user' ? (
+            <div className="space-y-3">
+              <h3 className="text-xs font-black uppercase tracking-wider text-white">Student Portal</h3>
+              <ul className="space-y-2 text-xs text-slate-400">
+                <li>
+                  <button onClick={() => onNavigate && onNavigate('home')} className="hover:text-indigo-400 transition cursor-pointer">
+                    Explore Campus Events
+                  </button>
+                </li>
+                <li>
+                  <button onClick={() => onNavigate && onNavigate('my-tickets')} className="hover:text-indigo-400 transition cursor-pointer">
+                    My Tickets & QR Passes
+                  </button>
+                </li>
+                <li>
+                  <button onClick={() => onNavigate && onNavigate('profile')} className="hover:text-indigo-400 transition cursor-pointer">
+                    Account & Profile
+                  </button>
+                </li>
+              </ul>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <h3 className="text-xs font-black uppercase tracking-wider text-white">Host & Councils</h3>
+              <ul className="space-y-2 text-xs text-slate-400">
+                <li>
+                  <button onClick={() => onNavigate && onNavigate('host-dashboard')} className="hover:text-amber-400 transition cursor-pointer">
+                    Organizer Dashboard
+                  </button>
+                </li>
+                <li>
+                  <button onClick={() => onNavigate && onNavigate('host-events')} className="hover:text-amber-400 transition cursor-pointer">
+                    Manage Published Events
+                  </button>
+                </li>
+                <li>
+                  <button onClick={() => onNavigate && onNavigate('host-attendees')} className="hover:text-amber-400 transition cursor-pointer">
+                    Gate Entrance Ledger
+                  </button>
+                </li>
+                <li>
+                  <button onClick={() => onNavigate && onNavigate('host-analytics')} className="hover:text-amber-400 transition cursor-pointer">
+                    Revenue & UPI Settlements
+                  </button>
+                </li>
+              </ul>
+            </div>
+          )}
 
           {/* Gate Verification & Security */}
           <div className="space-y-3">

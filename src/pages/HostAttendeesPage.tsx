@@ -35,7 +35,12 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
   const { currentUser } = useAuth();
   const [filterMode, setFilterMode] = useState<'all' | 'entered' | 'not_entered'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [allTickets, setAllTickets] = useState<Ticket[]>(() => StorageService.getTickets());
+  const organizerId = currentUser?.uid || '';
+  const organizerEmail = currentUser?.email || '';
+
+  const [allTickets, setAllTickets] = useState<Ticket[]>(() =>
+    StorageService.getHostTickets(organizerId, organizerEmail)
+  );
   const [allEvents, setAllEvents] = useState<CollegeEvent[]>(() => StorageService.getEvents());
 
   // Event-wise filter state: 'ALL' means all events, otherwise specific eventId
@@ -43,29 +48,25 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
     selectedEvent?.eventId || 'ALL'
   );
 
-  // Update selectedEventId if prop changes
+  // Reset or update selectedEventId when prop or organizer account changes
   useEffect(() => {
-    if (selectedEvent?.eventId) {
-      setSelectedEventId(selectedEvent.eventId);
-    }
-  }, [selectedEvent?.eventId]);
+    setSelectedEventId(selectedEvent?.eventId || 'ALL');
+  }, [selectedEvent?.eventId, organizerId]);
 
   // Keep state updated in real-time when new tickets or events are synced
   useEffect(() => {
     const handleUpdate = () => {
-      setAllTickets(StorageService.getTickets());
+      setAllTickets(StorageService.getHostTickets(organizerId, organizerEmail));
       setAllEvents(StorageService.getEvents());
     };
+    handleUpdate();
     window.addEventListener('campuspass_data_updated', handleUpdate);
     window.addEventListener('storage', handleUpdate);
     return () => {
       window.removeEventListener('campuspass_data_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
     };
-  }, []);
-
-  const organizerId = currentUser?.uid || '';
-  const organizerEmail = currentUser?.email || '';
+  }, [organizerId, organizerEmail]);
 
   // Filter events strictly by the current user's organizer ID or email
   const hostEvents: CollegeEvent[] = useMemo(() => {
@@ -126,6 +127,10 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
     }
 
     return true;
+  }).sort((a, b) => {
+    const timeB = new Date(b.entryTimestamp || b.issuedAt || 0).getTime();
+    const timeA = new Date(a.entryTimestamp || a.issuedAt || 0).getTime();
+    return timeB - timeA;
   });
 
   // Counts for the currently selected event view
@@ -187,7 +192,7 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
       StorageService.updateEventHostHelpline(activeEvent.eventId, helplineInput.trim());
     }
     setAllEvents(StorageService.getEvents());
-    setAllTickets(StorageService.getTickets());
+    setAllTickets(StorageService.getHostTickets(organizerId, organizerEmail));
     setIsEditingHelpline(false);
   };
 
@@ -336,7 +341,7 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
               </span>
               <div className="flex items-center gap-2 mt-0.5">
                 <span className="font-mono text-sm font-black text-slate-900">
-                  {activeEvent.hostPhone || helplineInput || '+91 98765 43210'}
+                  {activeEvent.hostPhone || helplineInput || 'Not set'}
                 </span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-white text-slate-700 border border-amber-200 font-bold">
                   Live on Digital Pass QR
@@ -435,9 +440,7 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
           {filteredTickets.map((t) => {
             const isEntered = t.entryStatus === 'entered';
             const eventObj = allEvents.find((e) => e.eventId === t.eventId);
-            const attendeeName = (!t.userName || t.userName.includes('Council') || t.userName.includes('Club') || t.userName.includes('Host'))
-              ? 'Rohan Verma'
-              : t.userName;
+            const attendeeName = t.userName?.trim() || 'Attendee';
 
             return (
               <div
@@ -507,7 +510,7 @@ export const HostAttendeesPage: React.FC<HostAttendeesPageProps> = ({
                     <div className="flex items-center gap-1.5">
                       <Phone className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                       <span className="font-mono text-xs text-slate-800 font-semibold">
-                        {t.phone || '+91 98765 43210'}
+                        {t.phone || 'Not provided'}
                       </span>
                     </div>
                   </div>

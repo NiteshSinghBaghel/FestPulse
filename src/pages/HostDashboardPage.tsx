@@ -104,13 +104,11 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     return StorageService.getHostEvents(organizerId, organizerEmail);
   }, [events, organizerId, organizerEmail]);
 
-  const allTickets = StorageService.getTickets();
-
   // Filter tickets strictly by the current user's organizer ID or email
   const hostTickets = useMemo(() => {
     if (!organizerId && !organizerEmail) return [];
     return StorageService.getHostTickets(organizerId, organizerEmail);
-  }, [allTickets, organizerId, organizerEmail, hostEvents, payoutsVersion]);
+  }, [organizerId, organizerEmail, hostEvents, payoutsVersion]);
 
   // Compute Statistics & Financial Revenue strictly by organizer ID
   const hostRevenueData = useMemo(() => {

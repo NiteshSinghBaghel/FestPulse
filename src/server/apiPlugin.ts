@@ -156,6 +156,42 @@ function sendJson(res: any, statusCode: number, data: any) {
   res.end(JSON.stringify(data));
 }
 
+function sanitizeAccount(account: any) {
+  if (!account || typeof account !== 'object') return account;
+  const { password, passwordHash, salt, oldEmail, ...safe } = account;
+  return safe;
+}
+
+function stripGatePinUnlessOwner(event: any, userId: string, userEmail: string) {
+  if (!event || typeof event !== 'object') return event;
+  const isOwner = Boolean(
+    (userId && event.hostId === userId) ||
+    (userEmail && event.hostEmail && String(event.hostEmail).toLowerCase().trim() === userEmail)
+  );
+  if (isOwner) return event;
+  const { gatePin, ...safeEvent } = event;
+  return safeEvent;
+}
+
+const sseClients = new Set<any>();
+
+function broadcastRealtime(type: string, meta?: Record<string, any>) {
+  if (sseClients.size === 0) return;
+  const payload = JSON.stringify({ type, timestamp: Date.now(), ...(meta || {}) });
+  const frame = `data: ${payload}\n\n`;
+  for (const client of Array.from(sseClients)) {
+    try {
+      if (!client.writableEnded && !client.destroyed) {
+        client.write(frame);
+      } else {
+        sseClients.delete(client);
+      }
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
 const apiMiddleware = async (req: any, res: any, next: any) => {
   const url = req.url || '';
   if (!url.startsWith('/api/')) {
@@ -164,15 +200,47 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
 
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
-          res.statusCode = 204;
-          res.setHeader('Access-Control-Allow-Origin', '*');
-          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-          res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-          return res.end();
-        }
+    res.statusCode = 204;
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return res.end();
+  }
 
-        try {
-          const db = loadDatabase();
+  // Real-time Server-Sent Events (SSE) stream
+  if ((url === '/api/realtime/stream' || url.startsWith('/api/realtime/stream?')) && req.method === 'GET') {
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.flushHeaders?.();
+    res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
+    sseClients.add(res);
+
+    const keepAlive = setInterval(() => {
+      try {
+        if (!res.writableEnded && !res.destroyed) {
+          res.write(': ping\n\n');
+        } else {
+          clearInterval(keepAlive);
+          sseClients.delete(res);
+        }
+      } catch {
+        clearInterval(keepAlive);
+        sseClients.delete(res);
+      }
+    }, 25000);
+
+    req.on('close', () => {
+      clearInterval(keepAlive);
+      sseClients.delete(res);
+    });
+    return;
+  }
+
+  try {
+    const db = loadDatabase();
 
           // 1. Health check
         if (url === '/api/health' && req.method === 'GET') {
@@ -257,8 +325,8 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           }
         }
 
-        // 2. Full synchronization: Get all cloud data
-        if (url === '/api/sync' && req.method === 'GET') {
+        // 2. Scoped synchronization: Return ONLY data permitted for the signed-in user/role
+        if ((url === '/api/sync' || url.startsWith('/api/sync?')) && req.method === 'GET') {
           // If PostgreSQL is connected, hydrate latest state from PostgreSQL
           if (PostgresService.getConnected()) {
             try {
@@ -281,12 +349,66 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             }
           }
 
+          const parsed = new URL(url, 'http://localhost');
+          const userId = (parsed.searchParams.get('userId') || '').trim();
+          const userEmail = (parsed.searchParams.get('userEmail') || '').toLowerCase().trim();
+          const role = (parsed.searchParams.get('role') || '').trim().toLowerCase();
+          const hasIdentity = Boolean(userId || userEmail);
+
+          const scopedEvents = db.events
+            .filter((e) => {
+              const isOwner = Boolean(
+                (userId && e.hostId === userId) ||
+                (userEmail && e.hostEmail && String(e.hostEmail).toLowerCase().trim() === userEmail)
+              );
+              return e.status !== 'draft' || isOwner;
+            })
+            .map((e) => stripGatePinUnlessOwner(e, userId, userEmail));
+
+          let scopedTickets: any[] = [];
+          if (hasIdentity) {
+            if (role === 'host') {
+              const hostEventIds = new Set(
+                db.events
+                  .filter((e) =>
+                    (userId && e.hostId === userId) ||
+                    (userEmail && e.hostEmail && String(e.hostEmail).toLowerCase().trim() === userEmail)
+                  )
+                  .map((e) => e.eventId)
+              );
+              scopedTickets = db.tickets.filter(
+                (t) => (userId && t.hostId === userId) || hostEventIds.has(t.eventId)
+              );
+            } else {
+              scopedTickets = db.tickets.filter(
+                (t) =>
+                  (userId && t.userId === userId) ||
+                  (userEmail && t.userEmail && String(t.userEmail).toLowerCase().trim() === userEmail)
+              );
+            }
+          }
+
+          const scopedPayouts =
+            role === 'host' && userId
+              ? db.payouts.filter((p) => p.hostId === userId)
+              : [];
+
+          const scopedAccounts = hasIdentity
+            ? db.accounts
+                .filter(
+                  (a) =>
+                    (userId && a.uid === userId) ||
+                    (userEmail && a.email && String(a.email).toLowerCase().trim() === userEmail)
+                )
+                .map(sanitizeAccount)
+            : [];
+
           const pgStatus = await PostgresService.getStatus();
           return sendJson(res, 200, {
-            events: db.events,
-            tickets: db.tickets,
-            accounts: db.accounts,
-            payouts: db.payouts,
+            events: scopedEvents,
+            tickets: scopedTickets,
+            accounts: scopedAccounts,
+            payouts: scopedPayouts,
             flushedAt: db.flushedAt || 0,
             postgresStatus: pgStatus,
             supabaseConfig: db.supabaseConfig,
@@ -305,6 +427,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           if (PostgresService.getConnected()) {
             await PostgresService.clearDatabase().catch((e: any) => console.warn('Postgres clear warning:', e));
           }
+          broadcastRealtime('reset');
           return sendJson(res, 200, {
             success: true,
             flushedAt: db.flushedAt,
@@ -315,15 +438,96 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           });
         }
 
+        // 2c. Dedicated Volunteer Gate Endpoints (PIN-scoped, zero financial leakage)
+        if ((url === '/api/volunteer/validate-pin' || url.startsWith('/api/volunteer/validate-pin?')) && req.method === 'GET') {
+          const parsed = new URL(url, 'http://localhost');
+          const pin = (parsed.searchParams.get('pin') || '').trim();
+          if (pin.length !== 6) {
+            return sendJson(res, 400, { valid: false, error: 'Please enter a valid 6-digit numeric Gate PIN.' });
+          }
+          const matchedEvent = db.events.find((e) => e.gatePin === pin && e.status !== 'cancelled');
+          if (!matchedEvent) {
+            return sendJson(res, 404, { valid: false, error: 'Invalid or inactive Gate PIN. Please check with your organizer.' });
+          }
+          return sendJson(res, 200, {
+            valid: true,
+            event: {
+              eventId: matchedEvent.eventId,
+              title: matchedEvent.title,
+              category: matchedEvent.category,
+              date: matchedEvent.date,
+              startTime: matchedEvent.startTime,
+              endTime: matchedEvent.endTime,
+              venue: matchedEvent.venue,
+              location: matchedEvent.location,
+              capacity: matchedEvent.capacity,
+              ticketsSold: matchedEvent.ticketsSold,
+              availableTickets: matchedEvent.availableTickets,
+              status: matchedEvent.status,
+              gatePin: matchedEvent.gatePin,
+              imageUrl: matchedEvent.imageUrl,
+            },
+          });
+        }
+
+        if ((url === '/api/volunteer/tickets' || url.startsWith('/api/volunteer/tickets?')) && req.method === 'GET') {
+          const parsed = new URL(url, 'http://localhost');
+          const eventId = (parsed.searchParams.get('eventId') || '').trim();
+          const pin = (parsed.searchParams.get('pin') || '').trim();
+          if (!eventId || pin.length !== 6) {
+            return sendJson(res, 400, { error: 'eventId and 6-digit pin are required.' });
+          }
+          const event = db.events.find((e) => e.eventId === eventId && e.gatePin === pin && e.status !== 'cancelled');
+          if (!event) {
+            return sendJson(res, 403, { error: 'Unauthorized: Invalid Gate PIN for this event.' });
+          }
+          const enteredTickets = db.tickets
+            .filter((t) => t.eventId === eventId && t.entryStatus === 'entered')
+            .map((t) => ({
+              ticketId: t.ticketId,
+              eventId: t.eventId,
+              eventTitle: t.eventTitle,
+              userName: t.userName,
+              rollNo: t.rollNo,
+              college: t.college,
+              quantity: t.quantity || 1,
+              status: t.status,
+              entryStatus: t.entryStatus,
+              entryTime: t.entryTime,
+              entryTimestamp: t.entryTimestamp,
+              verifiedBy: t.verifiedBy,
+            }))
+            .sort((a, b) => {
+              const tb = a.entryTimestamp ? new Date(b.entryTimestamp || 0).getTime() : 0;
+              const ta = a.entryTimestamp ? new Date(a.entryTimestamp || 0).getTime() : 0;
+              if (tb !== ta) return tb - ta;
+              return (b.entryTime || '').localeCompare(a.entryTime || '');
+            });
+          return sendJson(res, 200, enteredTickets);
+        }
+
         // 3. Events endpoints
         if (url === '/api/events' || url.startsWith('/api/events?')) {
           if (req.method === 'GET') {
             const parsed = new URL(url, 'http://localhost');
-            const hostId = parsed.searchParams.get('hostId');
-            if (hostId) {
-              return sendJson(res, 200, db.events.filter((e) => e.hostId === hostId));
+            const hostId = (parsed.searchParams.get('hostId') || '').trim();
+            const hostEmail = (parsed.searchParams.get('hostEmail') || '').toLowerCase().trim();
+            if (hostId || hostEmail) {
+              return sendJson(
+                res,
+                200,
+                db.events.filter(
+                  (e) =>
+                    (hostId && e.hostId === hostId) ||
+                    (hostEmail && e.hostEmail && String(e.hostEmail).toLowerCase().trim() === hostEmail)
+                )
+              );
             }
-            return sendJson(res, 200, db.events);
+            return sendJson(
+              res,
+              200,
+              db.events.filter((e) => e.status !== 'draft').map((e) => stripGatePinUnlessOwner(e, '', ''))
+            );
           }
           if (req.method === 'POST') {
             const newEvent = await parseBody(req);
@@ -340,6 +544,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               PostgresService.upsertEvent(newEvent).catch((e: any) => console.warn('Postgres event sync error:', e));
             }
+            broadcastRealtime('events', { eventId: newEvent.eventId });
             return sendJson(res, 200, { success: true, event: newEvent });
           }
         }
@@ -372,6 +577,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres event update error:', e));
             }
+            broadcastRealtime('events', { eventId });
             return sendJson(res, 200, { success: true, event: db.events[idx] });
           }
           if (req.method === 'DELETE') {
@@ -392,6 +598,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               PostgresService.deleteEvent(eventId).catch((e: any) => console.warn('Postgres event delete error:', e));
             }
+            broadcastRealtime('events', { eventId });
             return sendJson(res, 200, { success: true });
           }
         }
@@ -479,6 +686,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             PostgresService.upsertTicket(ticket).catch(() => {});
           }
 
+          broadcastRealtime('tickets', { ticketId: ticket.ticketId, eventId: ticket.eventId });
           return sendJson(res, 200, {
             success: true,
             message: `ENTRY GRANTED! Welcome ${ticket.userName}. Pass verified successfully.`,
@@ -487,17 +695,42 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           });
         }
 
-        // 4b. Tickets endpoints
+        // 4b. Tickets endpoints (strictly scoped)
         if (url === '/api/tickets' || url.startsWith('/api/tickets?')) {
           if (req.method === 'GET') {
             const parsed = new URL(url, 'http://localhost');
-            const hostId = parsed.searchParams.get('hostId');
-            if (hostId) {
-              const hostEvents = db.events.filter((e) => e.hostId === hostId);
+            const hostId = (parsed.searchParams.get('hostId') || '').trim();
+            const hostEmail = (parsed.searchParams.get('hostEmail') || '').toLowerCase().trim();
+            const userId = (parsed.searchParams.get('userId') || '').trim();
+            const userEmail = (parsed.searchParams.get('userEmail') || '').toLowerCase().trim();
+
+            if (hostId || hostEmail) {
+              const hostEvents = db.events.filter(
+                (e) =>
+                  (hostId && e.hostId === hostId) ||
+                  (hostEmail && e.hostEmail && String(e.hostEmail).toLowerCase().trim() === hostEmail)
+              );
               const hostEventIds = new Set(hostEvents.map((e) => e.eventId));
-              return sendJson(res, 200, db.tickets.filter((t) => t.hostId === hostId || hostEventIds.has(t.eventId)));
+              return sendJson(
+                res,
+                200,
+                db.tickets.filter((t) => (hostId && t.hostId === hostId) || hostEventIds.has(t.eventId))
+              );
             }
-            return sendJson(res, 200, db.tickets);
+
+            if (userId || userEmail) {
+              return sendJson(
+                res,
+                200,
+                db.tickets.filter(
+                  (t) =>
+                    (userId && t.userId === userId) ||
+                    (userEmail && t.userEmail && String(t.userEmail).toLowerCase().trim() === userEmail)
+                )
+              );
+            }
+
+            return sendJson(res, 200, []);
           }
           if (req.method === 'POST') {
             const newTicket = await parseBody(req);
@@ -514,6 +747,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               PostgresService.upsertTicket(newTicket).catch((e: any) => console.warn('Postgres ticket sync error:', e));
             }
+            broadcastRealtime('tickets', { ticketId: newTicket.ticketId, eventId: newTicket.eventId });
             return sendJson(res, 200, { success: true, ticket: newTicket });
           }
         }
@@ -562,14 +796,75 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               PostgresService.upsertTicket(db.tickets[idx]).catch((e: any) => console.warn('Postgres ticket update error:', e));
             }
+            broadcastRealtime('tickets', { ticketId, eventId: currentTicket.eventId });
             return sendJson(res, 200, { success: true, ticket: db.tickets[idx] });
           }
         }
 
-        // 5. Accounts endpoints
-        if (url === '/api/accounts') {
+        // 5. Server-verified Authentication & Sanitized Accounts endpoints
+        if (url === '/api/auth/login' && req.method === 'POST') {
+          const body = await parseBody(req);
+          const rawIdentifier = String(body.identifier || '').trim();
+          const password = String(body.password || '');
+          const clean = rawIdentifier.toLowerCase();
+          const cleanDigits = rawIdentifier.replace(/[\s\-()+]/g, '');
+
+          if (!rawIdentifier || !password) {
+            return sendJson(res, 400, { success: false, error: 'Identifier and password are required.' });
+          }
+
+          let matched = db.accounts.find((a) => {
+            const aEmail = a.email ? String(a.email).toLowerCase().trim() : '';
+            const aPhone = a.phone ? String(a.phone).replace(/[\s\-()+]/g, '') : '';
+            return (clean && aEmail === clean) || (cleanDigits.length >= 10 && aPhone === cleanDigits);
+          });
+
+          if (!matched && PostgresService.getConnected()) {
+            const pgAccs = await PostgresService.getAccounts().catch(() => []);
+            matched = pgAccs.find((a: any) => {
+              const aEmail = a.email ? String(a.email).toLowerCase().trim() : '';
+              const aPhone = a.phone ? String(a.phone).replace(/[\s\-()+]/g, '') : '';
+              return (clean && aEmail === clean) || (cleanDigits.length >= 10 && aPhone === cleanDigits);
+            });
+          }
+
+          if (!matched) {
+            return sendJson(res, 404, { success: false, code: 'NOT_FOUND', error: 'No account found with this identifier.' });
+          }
+
+          if (!matched.password || matched.password !== password) {
+            return sendJson(res, 401, {
+              success: false,
+              code: 'INVALID_PASSWORD',
+              error: matched.authProvider === 'google' && !matched.password
+                ? 'This account uses Google Sign-In. Please continue with Google or reset your password.'
+                : 'Incorrect password. Please verify your credentials or reset your password.',
+            });
+          }
+
+          return sendJson(res, 200, { success: true, account: sanitizeAccount(matched) });
+        }
+
+        if (url === '/api/accounts' || url.startsWith('/api/accounts?')) {
           if (req.method === 'GET') {
-            return sendJson(res, 200, db.accounts);
+            const parsed = new URL(url, 'http://localhost');
+            const uid = (parsed.searchParams.get('uid') || '').trim();
+            const identifier = (parsed.searchParams.get('identifier') || parsed.searchParams.get('email') || '').trim();
+            const clean = identifier.toLowerCase();
+            const cleanDigits = identifier.replace(/[\s\-()+]/g, '');
+
+            if (uid) {
+              return sendJson(res, 200, db.accounts.filter((a) => a.uid === uid).map(sanitizeAccount));
+            }
+            if (identifier) {
+              const found = db.accounts.filter((a) => {
+                const aEmail = a.email ? String(a.email).toLowerCase().trim() : '';
+                const aPhone = a.phone ? String(a.phone).replace(/[\s\-()+]/g, '') : '';
+                return (clean && aEmail === clean) || (cleanDigits.length >= 10 && aPhone === cleanDigits);
+              });
+              return sendJson(res, 200, found.map(sanitizeAccount));
+            }
+            return sendJson(res, 200, db.accounts.map(sanitizeAccount));
           }
           if (req.method === 'POST') {
             const account = await parseBody(req);
@@ -583,22 +878,30 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
                      a.email.toLowerCase().trim() === cleanEmail ||
                      (cleanOldEmail && a.email.toLowerCase().trim() === cleanOldEmail)
             );
+            let savedAccount: any;
             if (existingIdx >= 0) {
-              db.accounts[existingIdx] = { ...db.accounts[existingIdx], ...account };
-              if (cleanOldEmail && cleanOldEmail !== cleanEmail) {
-                delete db.accounts[existingIdx].oldEmail;
+              const existingAcc = db.accounts[existingIdx];
+              const incomingCopy = { ...account };
+              if (!incomingCopy.password && existingAcc.password) {
+                incomingCopy.password = existingAcc.password;
               }
+              savedAccount = { ...existingAcc, ...incomingCopy };
+              if (cleanOldEmail && cleanOldEmail !== cleanEmail) {
+                delete savedAccount.oldEmail;
+              }
+              db.accounts[existingIdx] = savedAccount;
             } else {
-              db.accounts.push(account);
+              savedAccount = { ...account };
+              db.accounts.push(savedAccount);
             }
 
             // Keep attendee tickets synced if user details changed
             if (Array.isArray(db.tickets)) {
               for (const t of db.tickets) {
-                if (t.userId === account.uid || (cleanOldEmail && t.userEmail?.toLowerCase().trim() === cleanOldEmail)) {
+                if (t.userId === savedAccount.uid || (cleanOldEmail && t.userEmail?.toLowerCase().trim() === cleanOldEmail)) {
                   t.userEmail = cleanEmail;
-                  if (account.name) t.userName = account.name;
-                  if (account.phone) t.userPhone = account.phone;
+                  if (savedAccount.name) t.userName = savedAccount.name;
+                  if (savedAccount.phone) t.phone = savedAccount.phone;
                 }
               }
             }
@@ -606,9 +909,9 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             // Keep host events synced if organizer details changed
             if (Array.isArray(db.events)) {
               for (const e of db.events) {
-                if (e.hostId === account.uid) {
-                  if (account.name) e.hostName = account.name;
-                  if (account.phone) e.hostPhone = account.phone;
+                if (e.hostId === savedAccount.uid) {
+                  if (savedAccount.name) e.hostName = savedAccount.name;
+                  if (savedAccount.phone) e.hostPhone = savedAccount.phone;
                 }
               }
             }
@@ -618,9 +921,10 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               if (cleanOldEmail && cleanOldEmail !== cleanEmail) {
                 await PostgresService.deleteAccount(cleanOldEmail).catch((e: any) => console.warn('Postgres delete old account error:', e));
               }
-              PostgresService.upsertAccount(account).catch((e: any) => console.warn('Postgres account sync error:', e));
+              PostgresService.upsertAccount(savedAccount).catch((e: any) => console.warn('Postgres account sync error:', e));
             }
-            return sendJson(res, 200, { success: true, account });
+            broadcastRealtime('accounts', { uid: savedAccount.uid });
+            return sendJson(res, 200, { success: true, account: sanitizeAccount(savedAccount) });
           }
         }
 
@@ -866,15 +1170,15 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           }
         }
 
-        // 6. Payouts endpoints
+        // 6. Payouts endpoints (strictly scoped per host)
         if (url === '/api/payouts' || url.startsWith('/api/payouts?')) {
           if (req.method === 'GET') {
             const parsed = new URL(url, 'http://localhost');
-            const hostId = parsed.searchParams.get('hostId');
-            if (hostId) {
-              return sendJson(res, 200, db.payouts.filter((p) => p.hostId === hostId));
+            const hostId = (parsed.searchParams.get('hostId') || '').trim();
+            if (!hostId) {
+              return sendJson(res, 200, []);
             }
-            return sendJson(res, 200, db.payouts);
+            return sendJson(res, 200, db.payouts.filter((p) => p.hostId === hostId));
           }
           if (req.method === 'POST') {
             const payout = await parseBody(req);
@@ -886,6 +1190,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               PostgresService.insertPayout(payout).catch((e: any) => console.warn('Postgres payout sync error:', e));
             }
+            broadcastRealtime('payouts', { payoutId: payout.payoutId, hostId: payout.hostId });
             return sendJson(res, 200, { success: true, payout });
           }
         }
@@ -1303,6 +1608,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               db.payouts.unshift(payoutRecord);
             }
             saveDatabase(db);
+            broadcastRealtime('payouts', { payoutId: payoutRecord.payoutId, hostId: payoutRecord.hostId });
 
             return sendJson(res, 200, {
               success: true,

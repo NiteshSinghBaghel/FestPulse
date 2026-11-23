@@ -37,20 +37,12 @@ type StepType = 'form' | 'processing' | 'verifying' | 'success' | 'failed';
 export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClose, onSuccess }) => {
   const { currentUser } = useAuth();
 
-  // Booking Form State - Initialized with student details
-  const isHost = currentUser?.role === 'host';
-  const defaultStudentName = isHost || !currentUser?.name || currentUser.name.includes('Club') || currentUser.name.includes('Council')
-    ? 'Aarav Mehta'
-    : currentUser.name;
-  const defaultStudentEmail = isHost || !currentUser?.email || currentUser.email.includes('nexus') || currentUser.email.includes('host')
-    ? 'aarav@iitd.ac.in'
-    : currentUser.email;
-
-  const [fullName, setFullName] = useState(defaultStudentName);
-  const [email, setEmail] = useState(defaultStudentEmail);
-  const [phone, setPhone] = useState(currentUser?.phone || '9876543210');
-  const [collegeName, setCollegeName] = useState(currentUser?.college || 'IIT Delhi');
-  const [rollNo, setRollNo] = useState('CS23B041');
+  // Booking Form State - Initialized from authenticated user details
+  const [fullName, setFullName] = useState(currentUser?.name || '');
+  const [email, setEmail] = useState(currentUser?.email || '');
+  const [phone, setPhone] = useState(currentUser?.phone || '');
+  const [collegeName, setCollegeName] = useState(currentUser?.college || '');
+  const [rollNo, setRollNo] = useState('');
   const [ticketQuantity, setTicketQuantity] = useState(1);
 
   // Form validation errors

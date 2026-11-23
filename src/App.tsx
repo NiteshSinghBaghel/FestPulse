@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from './context/AuthContext';
 import { CollegeEvent, Ticket, UserRole } from './types';
 import { StorageService } from './services/storageService';
@@ -17,15 +17,42 @@ import { VolunteerGateScannerModal } from './components/VolunteerGateScannerModa
 import { CreateEventModal } from './components/CreateEventModal';
 import { DigitalTicket } from './components/DigitalTicket';
 import { Footer } from './components/Footer';
-import { X } from 'lucide-react';
+import {
+  AppTab,
+  getDefaultTabForRole,
+  getPathForEvent,
+  getPathForLogin,
+  getPathForTab,
+  isValidTabForRole,
+  resolveRoute,
+} from './utils/routes';
 
 export const App: React.FC = () => {
   const { currentUser, role } = useAuth();
 
+  // Compute initial route synchronously from window.location so refresh never flashes wrong screens
+  const initialParsed =
+    typeof window !== 'undefined'
+      ? resolveRoute(
+          window.location.pathname,
+          window.location.search,
+          Boolean(currentUser),
+          role
+        )
+      : { kind: currentUser ? ('tab' as const) : ('landing' as const), tab: getDefaultTabForRole(role) };
+
   // Navigation State
-  const [activeTab, setActiveTab] = useState<string>('home');
+  const [activeTab, setActiveTab] = useState<AppTab>(
+    initialParsed.tab || getDefaultTabForRole(role)
+  );
+  const [pendingEventId, setPendingEventId] = useState<string | null>(
+    initialParsed.kind === 'event' ? initialParsed.eventId || null : null
+  );
   const [selectedEvent, setSelectedEvent] = useState<CollegeEvent | null>(null);
   const [selectedAttendeeEvent, setSelectedAttendeeEvent] = useState<CollegeEvent | null>(null);
+  const [pendingAttendeeEventId, setPendingAttendeeEventId] = useState<string | null>(
+    initialParsed.attendeeEventId || null
+  );
   const [focusSearchTrigger, setFocusSearchTrigger] = useState(0);
 
   // Modals State
@@ -35,6 +62,18 @@ export const App: React.FC = () => {
   const [isCreateEventOpen, setIsCreateEventOpen] = useState(false);
   const [newlyPurchasedTicket, setNewlyPurchasedTicket] = useState<Ticket | null>(null);
   const [prefilledScanTicket, setPrefilledScanTicket] = useState<Ticket | null>(null);
+
+  // App Data
+  const [events, setEvents] = useState<CollegeEvent[]>([]);
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+
+  // Landing Page & Auth Flow State
+  const [landingView, setLandingView] = useState<'landing' | 'login'>(
+    initialParsed.kind === 'login' ? 'login' : 'landing'
+  );
+  const [targetLoginRole, setTargetLoginRole] = useState<UserRole>(
+    initialParsed.landingRole || 'user'
+  );
 
   // Check URL parameters for direct volunteer gate scanner link (?gatePin=482910)
   useEffect(() => {
@@ -48,125 +87,267 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  // App Data
-  const [events, setEvents] = useState<CollegeEvent[]>([]);
-  const [tickets, setTickets] = useState<Ticket[]>([]);
-
-  // Landing Page & Auth Flow State
-  const [landingView, setLandingView] = useState<'landing' | 'login'>('landing');
-  const [targetLoginRole, setTargetLoginRole] = useState<UserRole>('user');
-
-  // Ensure browser back button (arrow) returns to Landing Page (Home) when on Login Page
-  useEffect(() => {
-    const handlePopState = (event: PopStateEvent) => {
-      if (!currentUser) {
-        if (event.state?.view === 'landing' || !event.state?.view) {
-          setLandingView('landing');
-        } else if (event.state?.view === 'login') {
-          setLandingView('login');
-        }
-      }
-    };
-
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [currentUser]);
-
-  // When currentUser logs out, immediately redirect to landing page
-  useEffect(() => {
-    if (!currentUser) {
-      setLandingView('landing');
-      try {
-        window.history.replaceState({ view: 'landing' }, '');
-      } catch {
-        // safe fallback
-      }
-    }
-  }, [currentUser]);
-
-  const handleNavigateToLogin = (chosenRole: UserRole) => {
-    setTargetLoginRole(chosenRole);
-    setLandingView('login');
-    try {
-      window.history.pushState({ view: 'login' }, '');
-    } catch {
-      // safe fallback
-    }
-  };
-
-  const handleBackToLanding = () => {
-    setLandingView('landing');
-    try {
-      window.history.pushState({ view: 'landing' }, '');
-    } catch {
-      // safe fallback
-    }
-  };
-
-  // Load events & tickets on mount & updates
-  const refreshData = () => {
+  // Load strictly user/role-scoped events & tickets from StorageService
+  const refreshData = useCallback(() => {
     const evts = StorageService.getEvents();
     setEvents(evts);
+
     if (currentUser) {
       if (role === 'host') {
         setTickets(StorageService.getHostAttendees(currentUser.uid, currentUser.email));
       } else {
         setTickets(StorageService.getUserTickets(currentUser.uid, currentUser.email));
       }
+    } else {
+      setTickets([]);
     }
-  };
+  }, [currentUser, role]);
 
-  // Multi-device Cloud Database synchronization & live real-time polling
+  // Synchronize URL & view state from current window.location
+  const syncStateFromUrl = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const resolved = resolveRoute(
+      window.location.pathname,
+      window.location.search,
+      Boolean(currentUser),
+      role
+    );
+
+    if (!currentUser) {
+      setSelectedEvent(null);
+      setPendingEventId(null);
+      setSelectedAttendeeEvent(null);
+      setPendingAttendeeEventId(null);
+
+      if (resolved.kind === 'login') {
+        setLandingView('login');
+        if (resolved.landingRole) setTargetLoginRole(resolved.landingRole);
+      } else {
+        setLandingView('landing');
+        if (resolved.isUnauthorizedOrUnknown) {
+          const search = window.location.search;
+          const keepPin =
+            search && (search.includes('gatePin=') || search.includes('volunteerGatePin='))
+              ? search
+              : '';
+          window.history.replaceState({ view: 'landing' }, '', `/${keepPin}`);
+        }
+      }
+      return;
+    }
+
+    if (resolved.kind === 'event' && resolved.eventId) {
+      setPendingEventId(resolved.eventId);
+      const match = StorageService.getEventById(resolved.eventId) || null;
+      setSelectedEvent(match);
+      setSelectedAttendeeEvent(null);
+      return;
+    }
+
+    const nextTab = resolved.tab || getDefaultTabForRole(role);
+    setPendingEventId(null);
+    setSelectedEvent(null);
+    setActiveTab(nextTab);
+    setPendingAttendeeEventId(resolved.attendeeEventId || null);
+
+    if (resolved.attendeeEventId) {
+      const evt = StorageService.getEventById(resolved.attendeeEventId) || null;
+      setSelectedAttendeeEvent(evt);
+    } else {
+      setSelectedAttendeeEvent(null);
+    }
+
+    if (resolved.isUnauthorizedOrUnknown || window.location.pathname === '/') {
+      window.history.replaceState(
+        { tab: nextTab },
+        '',
+        getPathForTab(nextTab, resolved.attendeeEventId)
+      );
+    }
+  }, [currentUser, role]);
+
+  // Resolve pending deep-linked /events/:eventId or ?eventId= once cloud events finish loading
   useEffect(() => {
-    // 1. Initial sync
-    StorageService.syncFromCloud().then(() => {
+    if (!currentUser) return;
+    if (pendingEventId) {
+      const matched = events.find((e) => e.eventId === pendingEventId);
+      if (matched) {
+        // Prevent non-owner from opening draft event via URL
+        const isOwnerHost =
+          role === 'host' &&
+          (matched.hostId === currentUser.uid ||
+            (matched.hostEmail &&
+              matched.hostEmail.toLowerCase().trim() === currentUser.email.toLowerCase().trim()));
+        if (matched.status !== 'draft' || isOwnerHost) {
+          setSelectedEvent(matched);
+        } else {
+          const defTab = getDefaultTabForRole(role);
+          setPendingEventId(null);
+          setSelectedEvent(null);
+          setActiveTab(defTab);
+          window.history.replaceState({ tab: defTab }, '', getPathForTab(defTab));
+        }
+      }
+    }
+    if (pendingAttendeeEventId && role === 'host') {
+      const matchedAttendeeEvt = events.find((e) => e.eventId === pendingAttendeeEventId);
+      if (matchedAttendeeEvt) {
+        setSelectedAttendeeEvent(matchedAttendeeEvt);
+      }
+    }
+  }, [events, pendingEventId, pendingAttendeeEventId, currentUser, role]);
+
+  // Keep selectedEvent synced with latest capacity/ticketsSold updates in real time
+  useEffect(() => {
+    if (!selectedEvent) return;
+    const latest = events.find((e) => e.eventId === selectedEvent.eventId);
+    if (latest && (latest.updatedAt !== selectedEvent.updatedAt || latest.availableTickets !== selectedEvent.availableTickets || latest.status !== selectedEvent.status)) {
+      setSelectedEvent(latest);
+    }
+  }, [events, selectedEvent]);
+
+  // Browser Back / Forward navigation handler (works both logged-out and logged-in)
+  useEffect(() => {
+    const handlePopState = () => {
+      syncStateFromUrl();
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [syncStateFromUrl]);
+
+  // Enforce route guard & clear sensitive state whenever currentUser or role changes
+  useEffect(() => {
+    if (!currentUser) {
+      setTickets([]);
+      setSelectedEvent(null);
+      setPendingEventId(null);
+      setSelectedAttendeeEvent(null);
+      setPendingAttendeeEventId(null);
+      setIsScannerOpen(false);
+      setIsCreateEventOpen(false);
+      setNewlyPurchasedTicket(null);
+      setPrefilledScanTicket(null);
+      syncStateFromUrl();
+      return;
+    }
+
+    syncStateFromUrl();
+  }, [currentUser?.uid, role, syncStateFromUrl]);
+
+  // Real-time multi-device & cross-tab sync (SSE + BroadcastChannel + Firestore onSnapshot + window focus + fallback poll)
+  useEffect(() => {
+    const session = currentUser
+      ? { uid: currentUser.uid, email: currentUser.email, role: currentUser.role }
+      : null;
+
+    StorageService.syncFromCloud(session).then(() => {
       refreshData();
     });
 
-    // 2. Refresh on window focus (e.g. user created event on phone, then looks at laptop browser)
+    const stopRealtime = StorageService.startRealtimeSync(session, () => {
+      refreshData();
+    });
+
+    const handleLocalUpdate = () => refreshData();
+    window.addEventListener('campuspass_data_updated', handleLocalUpdate);
+
     const handleFocus = () => {
-      StorageService.syncFromCloud().then(() => {
+      StorageService.syncFromCloud(session).then(() => {
         refreshData();
       });
     };
     window.addEventListener('focus', handleFocus);
 
-    // 3. Periodic background sync every 8 seconds
+    // Fallback safety sync every 15s (SSE + onSnapshot + BroadcastChannel handle sub-second updates)
     const interval = setInterval(() => {
-      StorageService.syncFromCloud().then(() => {
+      StorageService.syncFromCloud(session).then(() => {
         refreshData();
       });
-    }, 8000);
+    }, 15000);
 
     return () => {
+      stopRealtime();
+      window.removeEventListener('campuspass_data_updated', handleLocalUpdate);
       window.removeEventListener('focus', handleFocus);
       clearInterval(interval);
     };
-  }, [currentUser, role]);
+  }, [currentUser?.uid, role, refreshData]);
 
-  useEffect(() => {
-    refreshData();
-  }, [currentUser, role]);
+  // Helper navigation functions that strictly respect role + update browser URL cleanly
+  const navigateToTab = useCallback(
+    (requestedTab: string, attendeeEvent?: CollegeEvent | null) => {
+      const normalized = requestedTab === 'explore' ? 'home' : requestedTab;
+      const safeTab: AppTab = isValidTabForRole(normalized, role)
+        ? normalized
+        : getDefaultTabForRole(role);
 
-  // Auto refresh and navigate on role change from ANY page
-  useEffect(() => {
-    refreshData();
+      setPendingEventId(null);
+      setSelectedEvent(null);
+      setSelectedAttendeeEvent(safeTab === 'host-attendees' ? attendeeEvent || null : null);
+      setPendingAttendeeEventId(
+        safeTab === 'host-attendees' && attendeeEvent ? attendeeEvent.eventId : null
+      );
+      setActiveTab(safeTab);
+
+      try {
+        const nextUrl = getPathForTab(safeTab, attendeeEvent?.eventId);
+        if (window.location.pathname + window.location.search !== nextUrl) {
+          window.history.pushState({ tab: safeTab, attendeeEventId: attendeeEvent?.eventId }, '', nextUrl);
+        }
+      } catch {}
+    },
+    [role]
+  );
+
+  const navigateToEvent = useCallback((evt: CollegeEvent) => {
+    setSelectedEvent(evt);
+    setPendingEventId(evt.eventId);
+    try {
+      const nextUrl = getPathForEvent(evt.eventId);
+      if (window.location.pathname !== nextUrl) {
+        window.history.pushState({ eventId: evt.eventId }, '', nextUrl);
+      }
+    } catch {}
+  }, []);
+
+  const handleBackFromEvent = useCallback(() => {
     setSelectedEvent(null);
-    setSelectedAttendeeEvent(null);
-    if (role === 'host') {
-      setActiveTab('host-dashboard');
-    } else {
-      setActiveTab('home');
-    }
-  }, [role]);
+    setPendingEventId(null);
+    const fallbackTab = isValidTabForRole(activeTab, role)
+      ? activeTab
+      : getDefaultTabForRole(role);
+    setActiveTab(fallbackTab);
+    try {
+      window.history.pushState({ tab: fallbackTab }, '', getPathForTab(fallbackTab));
+    } catch {}
+  }, [activeTab, role]);
+
+  const handleNavigateToLogin = (chosenRole: UserRole) => {
+    setTargetLoginRole(chosenRole);
+    setLandingView('login');
+    try {
+      window.history.pushState(
+        { view: 'login', role: chosenRole },
+        '',
+        getPathForLogin(chosenRole)
+      );
+    } catch {}
+  };
+
+  const handleBackToLanding = () => {
+    setLandingView('landing');
+    try {
+      window.history.pushState({ view: 'landing' }, '', '/');
+    } catch {}
+  };
 
   const handleClosePassAndGoToExplore = () => {
     setNewlyPurchasedTicket(null);
-    setSelectedEvent(null);
-    setSelectedAttendeeEvent(null);
-    setActiveTab('home');
+    navigateToTab(role === 'host' ? 'host-dashboard' : 'home');
   };
 
+  // ==================== UNAUTHENTICATED GUARD ====================
+  // Strictly blocks ALL dashboard routes, Navbar, Footer, tickets & profile until user logs in
   if (!currentUser) {
     return (
       <>
@@ -184,11 +365,23 @@ export const App: React.FC = () => {
             }}
           />
         ) : (
-          <AuthPage 
-            onSuccess={refreshData} 
+          <AuthPage
+            onSuccess={() => {
+              const session = StorageService.syncFromCloud().then(() => refreshData());
+              void session;
+            }}
             initialRole={targetLoginRole}
             onBackToLanding={handleBackToLanding}
-            onSwitchRole={(newRole) => setTargetLoginRole(newRole)}
+            onSwitchRole={(newRole) => {
+              setTargetLoginRole(newRole);
+              try {
+                window.history.replaceState(
+                  { view: 'login', role: newRole },
+                  '',
+                  getPathForLogin(newRole)
+                );
+              } catch {}
+            }}
             onOpenVolunteerScanner={() => {
               setVolunteerGatePin('');
               setIsVolunteerScannerOpen(true);
@@ -210,20 +403,21 @@ export const App: React.FC = () => {
     );
   }
 
+  // ==================== AUTHENTICATED PORTAL ====================
+  const safeActiveTab: AppTab = isValidTabForRole(activeTab, role)
+    ? activeTab
+    : getDefaultTabForRole(role);
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
       {/* Top Navigation */}
       <Navbar
         onOpenSearch={() => {
-          setSelectedEvent(null);
-          setActiveTab('home');
-          setFocusSearchTrigger(prev => prev + 1);
+          navigateToTab(role === 'host' ? 'host-events' : 'home');
+          setFocusSearchTrigger((prev) => prev + 1);
         }}
-        activeTab={activeTab}
-        onNavigate={(tab) => {
-          setSelectedEvent(null);
-          setActiveTab(tab === 'explore' ? 'home' : tab);
-        }}
+        activeTab={safeActiveTab}
+        onNavigate={(tab) => navigateToTab(tab)}
         onOpenScanner={() => {
           setPrefilledScanTicket(null);
           setIsScannerOpen(true);
@@ -233,7 +427,7 @@ export const App: React.FC = () => {
           setIsVolunteerScannerOpen(true);
         }}
         onOpenCreateEvent={() => setIsCreateEventOpen(true)}
-        ticketCount={tickets.filter(t => t.entryStatus !== 'entered').length}
+        ticketCount={tickets.filter((t) => t.entryStatus !== 'entered' && t.status !== 'cancelled').length}
       />
 
       {/* Main Content Area */}
@@ -241,7 +435,7 @@ export const App: React.FC = () => {
         {selectedEvent ? (
           <EventDetailPage
             event={selectedEvent}
-            onBack={() => setSelectedEvent(null)}
+            onBack={handleBackFromEvent}
             onTicketPurchased={(ticket) => {
               refreshData();
               setNewlyPurchasedTicket(ticket);
@@ -252,10 +446,10 @@ export const App: React.FC = () => {
             {/* Student Screens */}
             {role === 'user' && (
               <>
-                {activeTab === 'home' && (
+                {safeActiveTab === 'home' && (
                   <HomePage
                     events={events}
-                    onSelectEvent={(evt) => setSelectedEvent(evt)}
+                    onSelectEvent={navigateToEvent}
                     onTicketPurchased={(ticket) => {
                       refreshData();
                       setNewlyPurchasedTicket(ticket);
@@ -264,10 +458,10 @@ export const App: React.FC = () => {
                   />
                 )}
 
-                {activeTab === 'my-tickets' && (
+                {safeActiveTab === 'my-tickets' && (
                   <MyTicketsPage
                     tickets={tickets}
-                    onExplore={() => setActiveTab('home')}
+                    onExplore={() => navigateToTab('home')}
                     onTicketsUpdated={refreshData}
                   />
                 )}
@@ -277,11 +471,13 @@ export const App: React.FC = () => {
             {/* Host Screens */}
             {role === 'host' && (
               <>
-                {(activeTab === 'host-dashboard' || activeTab === 'host-events' || activeTab === 'host-analytics') && (
+                {(safeActiveTab === 'host-dashboard' ||
+                  safeActiveTab === 'host-events' ||
+                  safeActiveTab === 'host-analytics') && (
                   <HostDashboardPage
                     events={events}
-                    currentTab={activeTab}
-                    onChangeTab={(newTab) => setActiveTab(newTab)}
+                    currentTab={safeActiveTab}
+                    onChangeTab={(newTab) => navigateToTab(newTab)}
                     onOpenCreateEvent={() => setIsCreateEventOpen(true)}
                     onOpenScanner={() => {
                       setPrefilledScanTicket(null);
@@ -292,50 +488,43 @@ export const App: React.FC = () => {
                       setIsVolunteerScannerOpen(true);
                     }}
                     onViewAttendees={(evt) => {
-                      setSelectedAttendeeEvent(evt || null);
-                      setActiveTab('host-attendees');
+                      navigateToTab('host-attendees', evt || null);
                     }}
-                    onSelectEvent={(evt) => setSelectedEvent(evt)}
+                    onSelectEvent={navigateToEvent}
                     onEventsUpdated={refreshData}
                   />
                 )}
 
-                {activeTab === 'host-attendees' && (
+                {safeActiveTab === 'host-attendees' && (
                   <HostAttendeesPage
                     selectedEvent={selectedAttendeeEvent}
-                    onBack={selectedAttendeeEvent ? () => setSelectedAttendeeEvent(null) : undefined}
+                    onBack={
+                      selectedAttendeeEvent
+                        ? () => navigateToTab('host-attendees', null)
+                        : undefined
+                    }
                   />
                 )}
               </>
             )}
 
             {/* Shared Profile Screen */}
-            {activeTab === 'profile' && (
-              <ProfilePage />
-            )}
+            {safeActiveTab === 'profile' && <ProfilePage />}
           </>
         )}
       </main>
 
-      {/* Responsive Website Footer (Visible on desktop & full pages) */}
-      <Footer 
-        onNavigate={(tab) => {
-          setSelectedEvent(null);
-          setSelectedAttendeeEvent(null);
-          setActiveTab(tab);
-        }}
+      {/* Responsive Website Footer (Role-scoped) */}
+      <Footer
+        onNavigate={(tab) => navigateToTab(tab)}
         role={role}
       />
 
       {/* Floating Bottom Navigation Bar (Hidden on desktop md+) */}
       <BottomNav
-        currentTab={activeTab}
-        onSelectTab={(tab) => {
-          setSelectedEvent(null);
-          setSelectedAttendeeEvent(null);
-          setActiveTab(tab === 'explore' ? 'home' : tab);
-        }}
-        ticketCount={tickets.filter(t => t.entryStatus !== 'entered').length}
+        currentTab={safeActiveTab}
+        onSelectTab={(tab) => navigateToTab(tab)}
+        ticketCount={tickets.filter((t) => t.entryStatus !== 'entered' && t.status !== 'cancelled').length}
         onOpenScanner={() => {
           setPrefilledScanTicket(null);
           setIsScannerOpen(true);
@@ -370,17 +559,17 @@ export const App: React.FC = () => {
         onClose={() => setIsCreateEventOpen(false)}
         onEventCreated={(newEvt) => {
           refreshData();
-          setSelectedEvent(newEvt);
+          navigateToEvent(newEvt);
         }}
       />
 
       {/* Newly Purchased Digital Ticket Modal */}
       {newlyPurchasedTicket && (
-        <div 
+        <div
           onClick={handleClosePassAndGoToExplore}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in overflow-y-auto cursor-pointer"
         >
-          <div 
+          <div
             onClick={(e) => e.stopPropagation()}
             className="relative w-full max-w-sm my-auto cursor-default"
           >
