@@ -1,28 +1,236 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /events/{eventId} {
-      allow read, write: if true;
+
+    // Global safety net
+    match /{document=**} {
+      allow read, write: if false;
     }
-    
-    match /tickets/{ticketId} {
-      allow read, write: if true;
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
-    
-    match /accounts/{accId} {
-      allow read, write: if true;
+
+    function incoming() {
+      return request.resource.data;
     }
-    
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.email is string && data.email.size() >= 3 && data.email.size() <= 120 &&
+             data.role in ['user', 'host'] &&
+             (!('college' in data) || (data.college is string && data.college.size() <= 120)) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() <= 30)) &&
+             (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 500)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidEvent(data) {
+      return data.hostId is string && data.hostId.size() >= 1 && data.hostId.size() <= 128 &&
+             data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 80 &&
+             data.title is string && data.title.size() >= 2 && data.title.size() <= 100 &&
+             data.description is string && data.description.size() >= 1 && data.description.size() <= 1500 &&
+             data.imageUrl is string && data.imageUrl.size() <= 500 &&
+             data.date is string && data.date.size() >= 4 && data.date.size() <= 30 &&
+             data.startTime is string && data.startTime.size() >= 2 && data.startTime.size() <= 30 &&
+             data.endTime is string && data.endTime.size() >= 2 && data.endTime.size() <= 30 &&
+             data.location is string && data.location.size() >= 2 && data.location.size() <= 120 &&
+             data.venue is string && data.venue.size() >= 2 && data.venue.size() <= 120 &&
+             data.price is int && data.price >= 0 && data.price <= 100000 &&
+             data.capacity is int && data.capacity >= 1 && data.capacity <= 100000 &&
+             data.ticketsSold is int && data.ticketsSold >= 0 && data.ticketsSold <= data.capacity &&
+             data.availableTickets is int && data.availableTickets >= 0 && data.availableTickets <= data.capacity &&
+             data.status in ['published', 'sold_out', 'cancelled'] &&
+             data.category in ['Tech', 'Cultural', 'Sports', 'Hackathon', 'Workshop', 'Music', 'Gaming'] &&
+             data.gatePin is string && data.gatePin.size() == 6 && data.gatePin.matches('^[0-9]{6}$') &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidTicket(data) {
+      return data.eventId is string && isValidId(data.eventId) &&
+             data.eventTitle is string && data.eventTitle.size() >= 1 && data.eventTitle.size() <= 120 &&
+             data.eventDate is string && data.eventDate.size() >= 1 && data.eventDate.size() <= 40 &&
+             data.eventTime is string && data.eventTime.size() >= 1 && data.eventTime.size() <= 50 &&
+             data.eventVenue is string && data.eventVenue.size() >= 1 && data.eventVenue.size() <= 120 &&
+             data.eventImageUrl is string && data.eventImageUrl.size() <= 500 &&
+             data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 80 &&
+             data.userEmail is string && data.userEmail.size() >= 3 && data.userEmail.size() <= 120 &&
+             (!('college' in data) || (data.college is string && data.college.size() <= 120)) &&
+             (!('rollNo' in data) || (data.rollNo is string && data.rollNo.size() <= 40)) &&
+             data.hostId is string && data.hostId.size() >= 1 && data.hostId.size() <= 128 &&
+             data.amount is int && data.amount >= 0 && data.amount <= 100000 &&
+             data.status in ['confirmed', 'cancelled'] &&
+             data.qrToken is string && data.qrToken.size() >= 6 && data.qrToken.size() <= 160 &&
+             data.qrHash is string && data.qrHash.size() >= 6 && data.qrHash.size() <= 128 &&
+             data.entryStatus in ['not_entered', 'entered'] &&
+             (!('entryTime' in data) || (data.entryTime is string && data.entryTime.size() <= 40)) &&
+             (!('entryTimestampMs' in data) || (data.entryTimestampMs is int && data.entryTimestampMs >= 0)) &&
+             (!('verifiedBy' in data) || data.verifiedBy in ['organizer', 'volunteer']) &&
+             (!('volunteerPin' in data) || (data.volunteerPin is string && data.volunteerPin.size() == 6 && data.volunteerPin.matches('^[0-9]{6}$'))) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPayout(data) {
+      return data.hostId is string && data.hostId.size() >= 1 && data.hostId.size() <= 128 &&
+             data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 80 &&
+             data.amount is int && data.amount >= 1 && data.amount <= 10000000 &&
+             data.method in ['UPI', 'BANK_TRANSFER'] &&
+             data.destination is string && data.destination.size() >= 3 && data.destination.size() <= 120 &&
+             data.accountHolderName is string && data.accountHolderName.size() >= 2 && data.accountHolderName.size() <= 80 &&
+             data.status in ['completed', 'processing'] &&
+             data.referenceId is string && data.referenceId.size() >= 4 && data.referenceId.size() <= 64 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 1. User Profiles (Strict Self-Ownership)
     match /users/{userId} {
-      allow read, write: if true;
+      allow get, list: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'name', 'email', 'role', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'name', 'email', 'role', 'college', 'phone', 'photoUrl', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['name', 'role', 'college', 'phone', 'photoUrl', 'updatedAt']);
+
+      allow delete: if isSignedIn() && isValidId(userId) && request.auth.uid == userId;
     }
-    
-    match /payments/{paymentId} {
-      allow read, write: if true;
+
+    // 2. Events (Public campus catalog for published events; strict creator ownership for edits/deletes)
+    match /events/{eventId} {
+      allow get: if isSignedIn() &&
+                    isValidId(eventId) &&
+                    (existing().status in ['published', 'sold_out', 'cancelled'] || existing().hostId == request.auth.uid);
+
+      allow list: if isSignedIn() &&
+                     (resource.data.status in ['published', 'sold_out', 'cancelled'] || resource.data.hostId == request.auth.uid);
+
+      allow create: if isSignedIn() &&
+                       isValidId(eventId) &&
+                       incoming().hostId == request.auth.uid &&
+                       incoming().ticketsSold == 0 &&
+                       incoming().availableTickets == incoming().capacity &&
+                       incoming().status == 'published' &&
+                       incoming().keys().hasAll(['hostId', 'hostName', 'title', 'description', 'imageUrl', 'date', 'startTime', 'endTime', 'location', 'venue', 'price', 'capacity', 'ticketsSold', 'availableTickets', 'status', 'category', 'gatePin', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['hostId', 'hostName', 'title', 'description', 'imageUrl', 'date', 'startTime', 'endTime', 'location', 'venue', 'price', 'capacity', 'ticketsSold', 'availableTickets', 'status', 'category', 'gatePin', 'createdAt', 'updatedAt']) &&
+                       isValidEvent(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(eventId) &&
+                       incoming().hostId == existing().hostId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidEvent(incoming()) && (
+                         // Host Organizer editing their own event
+                         (existing().hostId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'imageUrl', 'date', 'startTime', 'endTime', 'location', 'venue', 'price', 'capacity', 'availableTickets', 'status', 'category', 'gatePin', 'updatedAt'])) ||
+                         // Student purchasing a ticket (atomic increment +1 / decrement -1)
+                         (existing().status == 'published' &&
+                          existing().availableTickets > 0 &&
+                          incoming().ticketsSold == existing().ticketsSold + 1 &&
+                          incoming().availableTickets == existing().availableTickets - 1 &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['ticketsSold', 'availableTickets', 'status', 'updatedAt'])) ||
+                         // Student cancelling an unused ticket (atomic decrement -1 / increment +1)
+                         (existing().ticketsSold > 0 &&
+                          incoming().ticketsSold == existing().ticketsSold - 1 &&
+                          incoming().availableTickets == existing().availableTickets + 1 &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['ticketsSold', 'availableTickets', 'status', 'updatedAt']))
+                       );
+
+      allow delete: if isSignedIn() && isValidId(eventId) && existing().hostId == request.auth.uid;
     }
-    
+
+    // 3. Tickets (Strictly scoped to Student Owner or Event Organizer; Volunteer check-in verified by Gate PIN)
+    match /tickets/{ticketId} {
+      allow get: if isSignedIn() &&
+                    isValidId(ticketId) &&
+                    (existing().userId == request.auth.uid || existing().hostId == request.auth.uid);
+
+      allow list: if isSignedIn() &&
+                     (resource.data.userId == request.auth.uid || resource.data.hostId == request.auth.uid);
+
+      allow create: if isSignedIn() &&
+                       isValidId(ticketId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().status == 'confirmed' &&
+                       incoming().entryStatus == 'not_entered' &&
+                       incoming().keys().hasAll(['eventId', 'eventTitle', 'eventDate', 'eventTime', 'eventVenue', 'eventImageUrl', 'userId', 'userName', 'userEmail', 'hostId', 'amount', 'status', 'qrToken', 'qrHash', 'entryStatus', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['eventId', 'eventTitle', 'eventDate', 'eventTime', 'eventVenue', 'eventImageUrl', 'userId', 'userName', 'userEmail', 'college', 'rollNo', 'hostId', 'amount', 'status', 'qrToken', 'qrHash', 'entryStatus', 'entryTime', 'entryTimestampMs', 'verifiedBy', 'volunteerPin', 'createdAt', 'updatedAt']) &&
+                       isValidTicket(incoming()) &&
+                       exists(/databases/$(database)/documents/events/$(incoming().eventId)) &&
+                       get(/databases/$(database)/documents/events/$(incoming().eventId)).data.hostId == incoming().hostId &&
+                       get(/databases/$(database)/documents/events/$(incoming().eventId)).data.status == 'published';
+
+      allow update: if isSignedIn() &&
+                       isValidId(ticketId) &&
+                       isValidTicket(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().hostId == existing().hostId &&
+                       incoming().eventId == existing().eventId &&
+                       incoming().qrToken == existing().qrToken &&
+                       incoming().qrHash == existing().qrHash &&
+                       incoming().createdAt == existing().createdAt && (
+                         // Action 1: Student cancels unentered ticket
+                         (existing().userId == request.auth.uid &&
+                          existing().status == 'confirmed' &&
+                          existing().entryStatus == 'not_entered' &&
+                          incoming().status == 'cancelled' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+                         // Action 2: Event Organizer scans and checks in attendee
+                         (existing().hostId == request.auth.uid &&
+                          existing().status == 'confirmed' &&
+                          existing().entryStatus == 'not_entered' &&
+                          incoming().entryStatus == 'entered' &&
+                          incoming().verifiedBy == 'organizer' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['entryStatus', 'entryTime', 'entryTimestampMs', 'verifiedBy', 'updatedAt'])) ||
+                         // Action 3: Gate Volunteer with valid 6-digit Gate PIN checks in attendee
+                         (existing().status == 'confirmed' &&
+                          existing().entryStatus == 'not_entered' &&
+                          incoming().entryStatus == 'entered' &&
+                          incoming().verifiedBy == 'volunteer' &&
+                          incoming().volunteerPin is string &&
+                          incoming().volunteerPin == get(/databases/$(database)/documents/events/$(existing().eventId)).data.gatePin &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['entryStatus', 'entryTime', 'entryTimestampMs', 'verifiedBy', 'volunteerPin', 'updatedAt']))
+                       );
+
+      allow delete: if false;
+    }
+
+    // 4. Payouts (Strictly Isolated Per Organizer)
     match /payouts/{payoutId} {
-      allow read, write: if true;
+      allow get: if isSignedIn() && isValidId(payoutId) && existing().hostId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.hostId == request.auth.uid;
+
+      allow create: if isSignedIn() &&
+                       isValidId(payoutId) &&
+                       incoming().hostId == request.auth.uid &&
+                       incoming().keys().hasAll(['hostId', 'hostName', 'amount', 'method', 'destination', 'accountHolderName', 'status', 'referenceId', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['hostId', 'hostName', 'amount', 'method', 'destination', 'accountHolderName', 'status', 'referenceId', 'createdAt', 'updatedAt']) &&
+                       isValidPayout(incoming());
+
+      allow update, delete: if false;
     }
   }
 }

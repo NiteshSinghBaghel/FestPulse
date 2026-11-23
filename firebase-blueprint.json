@@ -1,0 +1,115 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile and selected CampusPass role (student user or event organizer host).",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the user." },
+        "name": { "type": "string", "description": "Display name." },
+        "email": { "type": "string", "description": "User email address." },
+        "role": { "type": "string", "enum": ["user", "host"], "description": "Active portal role." },
+        "college": { "type": "string", "description": "College or institution name." },
+        "phone": { "type": "string", "description": "Phone number." },
+        "photoUrl": { "type": "string", "description": "Profile photo URL." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["userId", "name", "email", "role", "createdAt", "updatedAt"]
+    },
+    "CollegeEvent": {
+      "title": "CollegeEvent",
+      "description": "Published college event owned by a host organizer with a unique 6-digit volunteer gate PIN.",
+      "type": "object",
+      "properties": {
+        "hostId": { "type": "string", "description": "UID of the event organizer." },
+        "hostName": { "type": "string", "description": "Display name of the organizer or club." },
+        "title": { "type": "string", "description": "Event title." },
+        "description": { "type": "string", "description": "Detailed event description." },
+        "imageUrl": { "type": "string", "description": "Cover artwork URL." },
+        "date": { "type": "string", "description": "Event date (YYYY-MM-DD)." },
+        "startTime": { "type": "string", "description": "Event start time." },
+        "endTime": { "type": "string", "description": "Event end time." },
+        "location": { "type": "string", "description": "Campus or city location." },
+        "venue": { "type": "string", "description": "Specific auditorium or venue hall." },
+        "price": { "type": "integer", "description": "Pass price in INR (0 for free)." },
+        "capacity": { "type": "integer", "description": "Maximum total pass capacity." },
+        "ticketsSold": { "type": "integer", "description": "Count of booked passes." },
+        "availableTickets": { "type": "integer", "description": "Remaining available passes." },
+        "status": { "type": "string", "enum": ["published", "sold_out", "cancelled"], "description": "Current lifecycle status." },
+        "category": { "type": "string", "enum": ["Tech", "Cultural", "Sports", "Hackathon", "Workshop", "Music", "Gaming"], "description": "Event category." },
+        "gatePin": { "type": "string", "description": "6-digit numeric passcode for gate volunteers." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["hostId", "hostName", "title", "description", "imageUrl", "date", "startTime", "endTime", "location", "venue", "price", "capacity", "ticketsSold", "availableTickets", "status", "category", "gatePin", "createdAt", "updatedAt"]
+    },
+    "Ticket": {
+      "title": "Ticket",
+      "description": "Digital entrance pass issued to a student and scannable by the owning host or authorized gate volunteer.",
+      "type": "object",
+      "properties": {
+        "eventId": { "type": "string", "description": "Referenced event document ID." },
+        "eventTitle": { "type": "string", "description": "Snapshot of event title." },
+        "eventDate": { "type": "string", "description": "Snapshot of event date." },
+        "eventTime": { "type": "string", "description": "Snapshot of event time." },
+        "eventVenue": { "type": "string", "description": "Snapshot of event venue." },
+        "eventImageUrl": { "type": "string", "description": "Snapshot of event cover image URL." },
+        "userId": { "type": "string", "description": "Student UID who booked the pass." },
+        "userName": { "type": "string", "description": "Attendee name." },
+        "userEmail": { "type": "string", "description": "Attendee email." },
+        "college": { "type": "string", "description": "Attendee college." },
+        "rollNo": { "type": "string", "description": "Attendee college roll number." },
+        "hostId": { "type": "string", "description": "UID of the event organizer." },
+        "amount": { "type": "integer", "description": "Amount paid in INR." },
+        "status": { "type": "string", "enum": ["confirmed", "cancelled"], "description": "Ticket booking status." },
+        "qrToken": { "type": "string", "description": "Unique anti-counterfeit QR verification token." },
+        "qrHash": { "type": "string", "description": "SHA-256 checksum of ticket & event." },
+        "entryStatus": { "type": "string", "enum": ["not_entered", "entered"], "description": "Gate check-in status." },
+        "entryTime": { "type": "string", "description": "Formatted check-in clock time." },
+        "entryTimestampMs": { "type": "integer", "description": "Epoch milliseconds when attendee entered for strict newest-first sorting." },
+        "verifiedBy": { "type": "string", "enum": ["organizer", "volunteer"], "description": "Whether checked in by organizer or volunteer gate PIN." },
+        "volunteerPin": { "type": "string", "description": "6-digit Gate PIN used by volunteer on entry." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["eventId", "eventTitle", "eventDate", "eventTime", "eventVenue", "eventImageUrl", "userId", "userName", "userEmail", "hostId", "amount", "status", "qrToken", "qrHash", "entryStatus", "createdAt", "updatedAt"]
+    },
+    "PayoutRecord": {
+      "title": "PayoutRecord",
+      "description": "Organizer revenue withdrawal settlement record.",
+      "type": "object",
+      "properties": {
+        "hostId": { "type": "string", "description": "UID of the organizer." },
+        "hostName": { "type": "string", "description": "Display name of the organizer." },
+        "amount": { "type": "integer", "description": "Withdrawal amount in INR." },
+        "method": { "type": "string", "enum": ["UPI", "BANK_TRANSFER"], "description": "Settlement method." },
+        "destination": { "type": "string", "description": "UPI VPA or bank account number." },
+        "accountHolderName": { "type": "string", "description": "Beneficiary name." },
+        "status": { "type": "string", "enum": ["completed", "processing"], "description": "Settlement status." },
+        "referenceId": { "type": "string", "description": "UTR or payout reference ID." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server creation timestamp." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server update timestamp." }
+      },
+      "required": ["hostId", "hostName", "amount", "method", "destination", "accountHolderName", "status", "referenceId", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Per-user private profile and role configuration."
+    },
+    "/events/{eventId}": {
+      "schema": { "$ref": "#/entities/CollegeEvent" },
+      "description": "Campus events collection with hostId ownership and 6-digit gatePin."
+    },
+    "/tickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/Ticket" },
+      "description": "Student passes and gate check-in ledger isolated by student userId and organizer hostId."
+    },
+    "/payouts/{payoutId}": {
+      "schema": { "$ref": "#/entities/PayoutRecord" },
+      "description": "Organizer revenue settlement withdrawals isolated by hostId."
+    }
+  }
+}

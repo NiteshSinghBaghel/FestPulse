@@ -1,6 +1,6 @@
 {
-  "name": "Fest-Plus - College Events & Tickets",
-  "description": "Full-width responsive college event discovery and ticketing web platform with 1-click UPI payments, digital anti-counterfeit QR passes, and real-time gate scanner ledger.",
+  "name": "Fest-Plus Campus Events",
+  "description": "Campus event discovery, digital QR passes, organizer revenue isolation, live gate scanner, and 6-digit volunteer gate passcode sharing.",
   "requestFramePermissions": [
     "camera"
   ],
