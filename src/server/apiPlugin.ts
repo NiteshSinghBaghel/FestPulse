@@ -430,7 +430,7 @@ async function hydrateDbFromPostgres(db: DatabaseSchema): Promise<boolean> {
   }
 }
 
-const apiMiddleware = async (req: any, res: any, next: any) => {
+export const apiMiddleware = async (req: any, res: any, next: any) => {
   const url = req.url || '';
   if (!url.startsWith('/api/')) {
     return next();
