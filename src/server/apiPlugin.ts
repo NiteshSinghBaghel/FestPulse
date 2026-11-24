@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { fileURLToPath } from 'url';
 import type { Plugin, Connect } from 'vite';
 import { PostgresService, POSTGRES_SCHEMA_SQL } from './postgresService';
 
@@ -8,13 +9,18 @@ const DB_FILE_PATH = path.resolve(process.cwd(), 'data/campuspass_db.json');
 
 function getEnvKey(key: string, defaultVal: string): string {
   try {
-    const envPath = path.resolve(process.cwd(), '.env');
-    if (fs.existsSync(envPath)) {
-      const content = fs.readFileSync(envPath, 'utf8');
-      const match = content.match(new RegExp(`^${key}=(.*)$`, 'm'));
-      const raw = match?.[1]?.trim().replace(/^["']|["']$/g, '').trim();
-      if (raw) {
-        return raw;
+    const envPaths = [
+      path.resolve(process.cwd(), '.env'),
+      fileURLToPath(new URL('../../.env', import.meta.url)),
+    ];
+    for (const envPath of envPaths) {
+      if (fs.existsSync(envPath)) {
+        const content = fs.readFileSync(envPath, 'utf8');
+        const match = content.match(new RegExp(`^\\s*${key}\\s*=\\s*(.*?)\\s*$`, 'm'));
+        const raw = match?.[1]?.trim().replace(/^["']|["']$/g, '').trim();
+        if (raw) {
+          return raw;
+        }
       }
     }
   } catch {}
@@ -1582,6 +1588,9 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               isConfigured: rzp.isConfigured,
               isLive: rzp.isLive,
               hasSecret: Boolean(rzp.keySecret),
+              configurationError: rzp.isConfigured
+                ? ''
+                : 'Replace demo or placeholder Razorpay credentials with real test/live API keys from your Razorpay Dashboard.',
               hasValidPayoutAccount: rzp.hasValidPayoutAccount,
               accountNumber: rzp.hasValidPayoutAccount
                 ? `${rzp.accountNumber.slice(0, 4)}••••${rzp.accountNumber.slice(-4)}`

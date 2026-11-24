@@ -1,13 +1,82 @@
 {
   "events": [
     {
+      "hostId": "demo_host_uid",
+      "hostName": "IIT Cultural Committee Executive",
+      "title": "Convocation",
+      "description": "today uiebbvhvb",
+      "imageUrl": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1000&auto=format&fit=crop&q=80",
+      "date": "2026-12-15",
+      "startTime": "10:00 AM",
+      "endTime": "05:00 PM",
+      "location": "Main Campus, Block C",
+      "venue": "Seminar Hall 1",
+      "price": 1,
+      "currency": "INR",
+      "capacity": 200,
+      "status": "published",
+      "category": "Tech",
+      "hostPhone": "9876543210",
+      "hostEmail": "host@campusfest.org",
+      "rules": [
+        "College ID required",
+        "No late entries past 11:30 AM"
+      ],
+      "amenities": [
+        "Free Refreshments",
+        "Wi-Fi Access",
+        "Digital Certificate"
+      ],
+      "eventId": "evt-mwuwpklm-hzct",
+      "gatePin": "939357",
+      "ticketsSold": 1,
+      "availableTickets": 199,
+      "createdAt": "2026-11-24T16:26:10.954Z",
+      "updatedAt": "2026-11-24T16:27:15.867Z"
+    },
+    {
+      "hostId": "demo_host_uid",
+      "hostName": "IIT Cultural Committee Executive",
+      "title": "Nitesh Full Night free",
+      "description": "mnewbhjb",
+      "imageUrl": "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1000&auto=format&fit=crop&q=80",
+      "date": "2026-10-15",
+      "startTime": "10:00 AM",
+      "endTime": "05:00 PM",
+      "location": "Main Campus, Block C",
+      "venue": "Seminar Hall 1",
+      "price": 149,
+      "currency": "INR",
+      "capacity": 200,
+      "status": "published",
+      "category": "Tech",
+      "hostPhone": "9876543210",
+      "hostEmail": "host@campusfest.org",
+      "rules": [
+        "College ID required",
+        "No late entries past 11:30 AM"
+      ],
+      "amenities": [
+        "Free Refreshments",
+        "Wi-Fi Access",
+        "Digital Certificate"
+      ],
+      "eventId": "evt-mwuu8ti0-hxz1",
+      "gatePin": "497999",
+      "ticketsSold": 0,
+      "availableTickets": 200,
+      "createdAt": "2026-11-24T15:17:10.104Z",
+      "updatedAt": "2026-11-24T16:26:10.968Z"
+    },
+    {
       "eventId": "evt_test_B_1793622679023",
       "hostId": "org_strict_B_1793622678947",
       "title": "Org B Cultural Fest",
       "price": 300,
       "capacity": 200,
       "ticketsSold": 1,
-      "status": "published"
+      "status": "published",
+      "gatePin": "730639"
     },
     {
       "eventId": "evt_test_A_1793622678947",
@@ -16,7 +85,8 @@
       "price": 500,
       "capacity": 100,
       "ticketsSold": 2,
-      "status": "published"
+      "status": "published",
+      "gatePin": "400356"
     },
     {
       "eventId": "evt_beta_1793543121760",
@@ -30,7 +100,8 @@
       "availableTickets": 50,
       "status": "published",
       "date": "2026-11-25",
-      "venue": "Sports Complex"
+      "venue": "Sports Complex",
+      "gatePin": "720809"
     },
     {
       "eventId": "evt_alpha_1793543121758",
@@ -44,7 +115,8 @@
       "availableTickets": 100,
       "status": "published",
       "date": "2026-11-20",
-      "venue": "Main Stage"
+      "venue": "Main Stage",
+      "gatePin": "985421"
     },
     {
       "hostId": "demo_host_uid",
@@ -76,10 +148,39 @@
       "ticketsSold": 2,
       "availableTickets": 198,
       "createdAt": "2026-10-12T15:22:04.888Z",
-      "updatedAt": "2026-10-12T15:22:58.023Z"
+      "updatedAt": "2026-11-24T16:26:10.976Z",
+      "gatePin": "613984"
     }
   ],
   "tickets": [
+    {
+      "ticketId": "TKT-59876677",
+      "eventId": "evt-mwuwpklm-hzct",
+      "eventTitle": "Convocation",
+      "eventDate": "2026-12-15",
+      "eventTime": "10:00 AM",
+      "eventVenue": "Seminar Hall 1, Main Campus, Block C",
+      "eventImageUrl": "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=1000&auto=format&fit=crop&q=80",
+      "userId": "usr_mwuufh48_9lr88",
+      "userName": "Harsh",
+      "userEmail": "harshshakya9084331@gmail.com",
+      "phone": "8077827705",
+      "college": "College Student",
+      "rollNo": "CS2005",
+      "quantity": 1,
+      "hostId": "demo_host_uid",
+      "hostPhone": "9876543210",
+      "paymentId": "pay_U44tuvxTT6fj8P",
+      "orderId": "order_U44tkWwf1uTGxI",
+      "amount": 1,
+      "currency": "INR",
+      "status": "confirmed",
+      "qrToken": "SEC-TK-TKT-59876677-2N7IL2XZ",
+      "qrHash": "sha256_1795537635863_aczkd0akma",
+      "issuedAt": "2026-11-24T16:27:15.863Z",
+      "entryStatus": "not_entered",
+      "exitStatus": "not_exited"
+    },
     {
       "ticketId": "TKT_ORGA_1793622679026",
       "eventId": "evt_test_A_1793622678947",
@@ -113,9 +214,9 @@
       "eventVenue": "Seminar Hall 1",
       "eventImageUrl": "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=1000&auto=format&fit=crop&q=80",
       "userId": "demo_user_uid",
-      "userName": "Aarav Sharma",
+      "userName": "Aarav Sharma (Verified)",
       "userEmail": "student@college.edu",
-      "phone": "9876543210",
+      "phone": "9988776655",
       "hostId": "demo_host_uid",
       "paymentId": "pay_mock_1793110133996",
       "orderId": "order_mock_1793110133996",
@@ -140,7 +241,7 @@
       "userId": "demo_user_uid",
       "userName": "Aarav Sharma (Verified)",
       "userEmail": "student@college.edu",
-      "phone": "9876543210",
+      "phone": "9988776655",
       "hostId": "demo_host_uid",
       "paymentId": "pay_mock_1792766117021",
       "orderId": "order_mock_1792766117021",
@@ -166,7 +267,7 @@
       "userId": "demo_user_uid",
       "userName": "Aarav Sharma (Verified)",
       "userEmail": "student@college.edu",
-      "phone": "9876543210",
+      "phone": "9988776655",
       "hostId": "demo_host_uid",
       "paymentId": "pay_mock_1792766028387",
       "orderId": "order_mock_1792766028387",
@@ -192,7 +293,7 @@
       "userId": "demo_user_uid",
       "userName": "Aarav Sharma (Verified)",
       "userEmail": "student@college.edu",
-      "phone": "9876543210",
+      "phone": "9988776655",
       "hostId": "demo_host_uid",
       "paymentId": "pay_mock_1792765998882",
       "orderId": "order_mock_1792765998882",
@@ -218,7 +319,7 @@
       "userId": "demo_user_uid",
       "userName": "Aarav Sharma (Verified)",
       "userEmail": "student@college.edu",
-      "phone": "9876543210",
+      "phone": "9988776655",
       "hostId": "demo_host_uid",
       "paymentId": "pay_mock_1792765955254",
       "orderId": "order_mock_1792765955254",
@@ -242,7 +343,7 @@
       "userId": "demo_user_uid",
       "userName": "Aarav Sharma (Verified)",
       "userEmail": "student@college.edu",
-      "phone": "9876543210",
+      "phone": "9988776655",
       "purchaseDate": "2026-10-23T14:31:14.407Z",
       "qrCode": "CAMPUSPASS:1792765874407",
       "amount": 149,
@@ -260,7 +361,7 @@
       "userId": "demo_user_uid",
       "userName": "Aarav Sharma (Verified)",
       "userEmail": "student@college.edu",
-      "phone": "9876543210",
+      "phone": "9988776655",
       "college": "IIT Delhi (CS Dept)",
       "rollNo": "CS23B041",
       "quantity": 1,
@@ -289,7 +390,7 @@
       "userId": "demo_user_uid",
       "userName": "Aarav Sharma (Verified)",
       "userEmail": "student@college.edu",
-      "phone": "9876543210",
+      "phone": "9988776655",
       "college": "IIT Delhi (CS Dept)",
       "rollNo": "CS23B041",
       "quantity": 1,
@@ -320,7 +421,7 @@
       "authProvider": "google",
       "createdAt": "2026-10-10T16:54:43.861Z",
       "password": "StudentNewPass2026!",
-      "updatedAt": "2026-10-21T14:08:16.360Z",
+      "updatedAt": "2026-11-24T15:25:03.613Z",
       "oldEmail": "student@college.edu"
     },
     {
@@ -334,7 +435,7 @@
       "authProvider": "google",
       "createdAt": "2026-10-12T15:21:24.481Z",
       "password": "HostNewPass2026!",
-      "updatedAt": "2026-10-21T14:08:16.366Z"
+      "updatedAt": "2026-11-24T16:25:27.572Z"
     },
     {
       "uid": "usr_mvi6t981_a2o34",
@@ -370,6 +471,18 @@
       "name": "Host Beta (Sports)",
       "email": "beta@fest.org",
       "role": "host"
+    },
+    {
+      "uid": "usr_mwuufh48_9lr88",
+      "name": "Harsh",
+      "email": "harshshakya9084331@gmail.com",
+      "password": "Harsh@2004",
+      "role": "user",
+      "college": "College Student",
+      "phone": "8077827705",
+      "photoURL": "https://api.dicebear.com/7.x/bottts/svg?seed=Harsh",
+      "authProvider": "email",
+      "createdAt": "2026-11-24T15:22:20.648Z"
     }
   ],
   "payouts": [
@@ -451,11 +564,30 @@
       "studentEmail": "",
       "timestamp": "2026-10-12T15:42:07.628Z",
       "isLive": false
+    },
+    {
+      "paymentId": "pay_U44tuvxTT6fj8P",
+      "orderId": "order_U44tkWwf1uTGxI",
+      "amount": 1,
+      "currency": "INR",
+      "status": "captured",
+      "method": "upi",
+      "vpa": "8077827705-1@nyes",
+      "eventId": "evt-mwuwpklm-hzct",
+      "eventTitle": "Convocation",
+      "hostId": "demo_host_uid",
+      "hostEmail": "host@campusfest.org",
+      "quantity": 1,
+      "userId": "usr_mwuufh48_9lr88",
+      "studentName": "Harsh",
+      "studentEmail": "harshshakya9084331@gmail.com",
+      "timestamp": "2026-11-24T16:27:15.857Z",
+      "isLive": true
     }
   ],
   "razorpayConfig": {
-    "keyId": "",
-    "keySecret": "",
+    "keyId": "rzp_live_U44plcE2xpTbX2",
+    "keySecret": "J13Eheo1NgPXc6mw4Kha8NM2",
     "accountNumber": "",
     "webhookSecret": ""
   },
@@ -472,5 +604,6 @@
       "createdAt": "2026-10-27T14:08:54.008Z",
       "expiresAt": 1793113734008
     }
-  }
+  },
+  "hostPayoutProfiles": {}
 }

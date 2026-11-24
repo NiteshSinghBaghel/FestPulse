@@ -455,17 +455,53 @@ export class StorageService {
       return [];
     }
     try {
-      const parsed: CollegeEvent[] = JSON.parse(raw);
-      return parsed.filter(e =>
-        e && e.eventId &&
-        !e.eventId.startsWith('evt-tech-fest-2026') &&
-        !e.eventId.startsWith('evt-tech-summit-2025') &&
-        !e.eventId.startsWith('evt-cultural-night') &&
-        !e.eventId.startsWith('evt-esports-championship') &&
-        !e.eventId.startsWith('evt-ai-workshop') &&
-        !e.eventId.startsWith('evt-inter-college-derby') &&
-        !e.eventId.startsWith('evt-muefnnqg-duty')
-      );
+      const parsed: Partial<CollegeEvent>[] = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+
+      return parsed
+        .filter((event): event is Partial<CollegeEvent> =>
+          Boolean(event && typeof event === 'object' && event.eventId)
+        )
+        .map((event) => {
+          const capacity = Number.isFinite(Number(event.capacity)) ? Number(event.capacity) : 0;
+          const ticketsSold = Number.isFinite(Number(event.ticketsSold)) ? Number(event.ticketsSold) : 0;
+          const availableTickets = Number.isFinite(Number(event.availableTickets))
+            ? Number(event.availableTickets)
+            : Math.max(0, capacity - ticketsSold);
+
+          return {
+            ...event,
+            eventId: String(event.eventId),
+            hostId: String(event.hostId || ''),
+            hostName: String(event.hostName || 'Campus Host'),
+            title: String(event.title || 'Untitled Event'),
+            description: String(event.description || ''),
+            imageUrl: String(event.imageUrl || ''),
+            date: String(event.date || ''),
+            startTime: String(event.startTime || ''),
+            endTime: String(event.endTime || ''),
+            location: String(event.location || ''),
+            venue: String(event.venue || ''),
+            price: Number.isFinite(Number(event.price)) ? Number(event.price) : 0,
+            currency: String(event.currency || 'INR'),
+            capacity,
+            ticketsSold,
+            availableTickets,
+            status: event.status || 'published',
+            category: event.category || 'Tech',
+            createdAt: String(event.createdAt || ''),
+            updatedAt: String(event.updatedAt || ''),
+          } as CollegeEvent;
+        })
+        .filter(e =>
+          !e.eventId.startsWith('evt-tech-fest-2026') &&
+          !e.eventId.startsWith('evt-tech-summit-2025') &&
+          !e.eventId.startsWith('evt-cultural-night') &&
+          !e.eventId.startsWith('evt-esports-championship') &&
+          !e.eventId.startsWith('evt-ai-workshop') &&
+          !e.eventId.startsWith('evt-inter-college-derby') &&
+          !e.eventId.startsWith('evt-muefnnqg-duty')
+        );
     } catch {
       return [];
     }

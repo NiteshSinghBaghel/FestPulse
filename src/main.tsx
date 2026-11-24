@@ -39,6 +39,12 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
             <p className="text-xs text-slate-500 leading-relaxed">
               An unexpected issue occurred while rendering. Click below to reload cleanly.
             </p>
+            {this.state.error && (
+              <div className="text-left bg-slate-900 text-rose-300 p-3 rounded-xl text-xs overflow-auto max-h-48 font-mono">
+                <div className="font-bold text-rose-400 mb-1">{this.state.error.name}: {this.state.error.message}</div>
+                <div className="text-[10px] text-slate-400 whitespace-pre-wrap">{this.state.error.stack}</div>
+              </div>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={() => window.location.reload()}

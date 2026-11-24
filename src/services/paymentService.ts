@@ -72,6 +72,7 @@ export interface RazorpayGatewayConfigStatus {
   isConfigured: boolean;
   isLive: boolean;
   hasSecret: boolean;
+  configurationError?: string;
   hasValidPayoutAccount: boolean;
   accountNumber?: string;
   webhookConfigured: boolean;

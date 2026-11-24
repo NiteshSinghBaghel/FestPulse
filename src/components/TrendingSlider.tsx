@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { CollegeEvent } from '../types';
-import { 
-  Flame, 
-  ChevronLeft, 
-  ChevronRight, 
-  Calendar, 
-  Clock, 
-  MapPin, 
-  Ticket as TicketIcon, 
+import {
+  Flame,
+  ChevronLeft,
+  ChevronRight,
+  Calendar,
+  Clock,
+  MapPin,
+  Ticket as TicketIcon,
   Sparkles,
   Users
 } from 'lucide-react';
@@ -91,7 +91,7 @@ export const TrendingSlider: React.FC<TrendingSliderProps> = ({
       </div>
 
       {/* Main Slide Card with smooth transition */}
-      <div 
+      <div
         onMouseEnter={() => setIsPaused(true)}
         onMouseLeave={() => setIsPaused(false)}
         onTouchStart={() => setIsPaused(true)}
@@ -148,7 +148,7 @@ export const TrendingSlider: React.FC<TrendingSliderProps> = ({
             <span className="truncate">{currentEvent.hostName}</span>
           </div>
 
-          <h3 
+          <h3
             onClick={() => onSelectEvent(currentEvent)}
             className="text-lg sm:text-xl font-black text-slate-900 hover:text-indigo-600 cursor-pointer transition line-clamp-1"
           >
@@ -216,11 +216,10 @@ export const TrendingSlider: React.FC<TrendingSliderProps> = ({
               key={idx}
               onClick={() => setCurrentIndex(idx)}
               aria-label={`Go to slide ${idx + 1}`}
-              className={`h-1.5 rounded-full transition-all duration-300 ${
-                currentIndex === idx 
-                  ? 'w-6 bg-indigo-600 shadow-sm' 
-                  : 'w-1.5 bg-slate-200 hover:bg-slate-300'
-              }`}
+              className={`h-1.5 rounded-full transition-all duration-300 ${currentIndex === idx
+                ? 'w-6 bg-indigo-600 shadow-sm'
+                : 'w-1.5 bg-slate-200 hover:bg-slate-300'
+                }`}
             />
           ))}
         </div>

@@ -418,7 +418,8 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
                 <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                   <span>
-                    Platform Razorpay payment gateway is not configured on the backend server yet. The administrator must add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in Secrets / .env.
+                    {gatewayConfig.configurationError ||
+                      'Platform Razorpay payment gateway is not configured on the backend server yet. The administrator must add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in Secrets / .env.'}
                   </span>
                 </div>
               )}
