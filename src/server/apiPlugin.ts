@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import type { Plugin, Connect } from 'vite';
 import { PostgresService, POSTGRES_SCHEMA_SQL } from './postgresService';
+import { MongoDbService } from './mongoService';
 
 const DB_FILE_PATH = path.resolve(process.cwd(), 'data/campuspass_db.json');
 
@@ -201,6 +202,7 @@ function saveDatabase(data: DatabaseSchema): boolean {
       fs.mkdirSync(dir, { recursive: true });
     }
     fs.writeFileSync(DB_FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
+    void MongoDbService.saveSnapshot(data);
     return true;
   } catch (error) {
     console.error('[API Server] Error saving database:', error);
@@ -478,6 +480,26 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
   try {
     const db = loadDatabase();
 
+    // MongoDB Atlas is the cloud persistence source when MONGODB_URI is configured.
+    if (MongoDbService.getUri()) {
+      const mongoConnected = await MongoDbService.ensureConnected();
+      if (mongoConnected) {
+        const remoteSnapshot = await MongoDbService.hydrateAll();
+        if (remoteSnapshot) {
+          db.events = Array.isArray(remoteSnapshot.events) ? remoteSnapshot.events : db.events;
+          db.tickets = Array.isArray(remoteSnapshot.tickets) ? remoteSnapshot.tickets : db.tickets;
+          db.accounts = Array.isArray(remoteSnapshot.accounts) ? remoteSnapshot.accounts : db.accounts;
+          db.payouts = Array.isArray(remoteSnapshot.payouts) ? remoteSnapshot.payouts : db.payouts;
+          db.payments = Array.isArray(remoteSnapshot.payments) ? remoteSnapshot.payments : db.payments;
+          db.passwordResetTokens = remoteSnapshot.passwordResetTokens || db.passwordResetTokens;
+          db.hostPayoutProfiles = remoteSnapshot.hostPayoutProfiles || db.hostPayoutProfiles;
+          db.supabaseConfig = remoteSnapshot.supabaseConfig || db.supabaseConfig;
+        } else {
+          await MongoDbService.saveSnapshot(db);
+        }
+      }
+    }
+
     // Auto-connect permanent PostgreSQL database when DATABASE_URL / POSTGRES_URL is configured
     if (!manuallyDisconnectedPostgres) {
       const configuredPgUrl = getConfiguredDatabaseUrl();
@@ -500,10 +522,12 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           // 1. Health check
         if (url === '/api/health' && req.method === 'GET') {
           const pgStatus = await PostgresService.getStatus();
+          const mongoStatus = await MongoDbService.getStatus();
           return sendJson(res, 200, {
             status: 'ok',
-            database: pgStatus.connected ? 'postgresql' : 'local_json',
-            storageMode: pgStatus.connected ? 'postgresql_permanent' : 'local_json_ephemeral',
+            database: mongoStatus.connected ? 'mongodb_atlas' : pgStatus.connected ? 'postgresql' : 'local_json',
+            storageMode: mongoStatus.connected ? 'mongodb_atlas' : pgStatus.connected ? 'postgresql_permanent' : 'local_json_ephemeral',
+            mongodb: mongoStatus,
             postgres: pgStatus,
             eventsCount: db.events.length,
             ticketsCount: db.tickets.length,

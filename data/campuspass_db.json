@@ -1,6 +1,40 @@
 {
   "events": [
     {
+      "hostId": "usr_mwuxws04_a5r4r",
+      "hostName": "haarry",
+      "title": "makhi",
+      "description": "ewjb",
+      "imageUrl": "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1000&auto=format&fit=crop&q=80",
+      "date": "2026-10-15",
+      "startTime": "10:00 AM",
+      "endTime": "05:00 PM",
+      "location": "Main Campus, Block C",
+      "venue": "Seminar Hall 1",
+      "price": 1,
+      "currency": "INR",
+      "capacity": 200,
+      "status": "published",
+      "category": "Tech",
+      "hostPhone": "6266626266",
+      "hostEmail": "harry@gmail.com",
+      "rules": [
+        "College ID required",
+        "No late entries past 11:30 AM"
+      ],
+      "amenities": [
+        "Free Refreshments",
+        "Wi-Fi Access",
+        "Digital Certificate"
+      ],
+      "eventId": "evt-mwuxx8ba-fq55",
+      "gatePin": "777371",
+      "ticketsSold": 2,
+      "availableTickets": 198,
+      "createdAt": "2026-11-24T17:00:07.894Z",
+      "updatedAt": "2026-11-24T18:04:31.697Z"
+    },
+    {
       "hostId": "demo_host_uid",
       "hostName": "IIT Cultural Committee Executive",
       "title": "Convocation",
@@ -32,7 +66,7 @@
       "ticketsSold": 1,
       "availableTickets": 199,
       "createdAt": "2026-11-24T16:26:10.954Z",
-      "updatedAt": "2026-11-24T16:50:47.765Z"
+      "updatedAt": "2026-11-24T17:38:43.359Z"
     },
     {
       "hostId": "demo_host_uid",
@@ -66,7 +100,7 @@
       "ticketsSold": 0,
       "availableTickets": 200,
       "createdAt": "2026-11-24T15:17:10.104Z",
-      "updatedAt": "2026-11-24T16:50:47.775Z"
+      "updatedAt": "2026-11-24T17:38:43.366Z"
     },
     {
       "eventId": "evt_test_B_1793622679023",
@@ -148,11 +182,39 @@
       "ticketsSold": 2,
       "availableTickets": 198,
       "createdAt": "2026-10-12T15:22:04.888Z",
-      "updatedAt": "2026-11-24T16:50:47.784Z",
+      "updatedAt": "2026-11-24T17:38:43.376Z",
       "gatePin": "613984"
     }
   ],
   "tickets": [
+    {
+      "ticketId": "TKT-39826069",
+      "eventId": "evt-mwuxx8ba-fq55",
+      "eventTitle": "makhi",
+      "eventDate": "2026-10-15",
+      "eventTime": "10:00 AM",
+      "eventVenue": "Seminar Hall 1, Main Campus, Block C",
+      "eventImageUrl": "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1000&auto=format&fit=crop&q=80",
+      "userId": "usr_mwuufh48_9lr88",
+      "userName": "Harsh",
+      "userEmail": "harshshakya9084331@gmail.com",
+      "phone": "8077827705",
+      "college": "College Student",
+      "rollNo": "CS588",
+      "quantity": 2,
+      "hostId": "usr_mwuxws04_a5r4r",
+      "hostPhone": "6266626266",
+      "paymentId": "pay_U45Tz1L15iTySF",
+      "orderId": "order_U45TpwfUy5Pdh8",
+      "amount": 2,
+      "currency": "INR",
+      "status": "confirmed",
+      "qrToken": "SEC-TK-TKT-39826069-TS3YSTQX",
+      "qrHash": "sha256_1795539683807_ygfrmfw1i8",
+      "issuedAt": "2026-11-24T17:01:23.807Z",
+      "entryStatus": "not_entered",
+      "exitStatus": "not_exited"
+    },
     {
       "ticketId": "TKT-59876677",
       "eventId": "evt-mwuwpklm-hzct",
@@ -483,6 +545,18 @@
       "photoURL": "https://api.dicebear.com/7.x/bottts/svg?seed=Harsh",
       "authProvider": "email",
       "createdAt": "2026-11-24T15:22:20.648Z"
+    },
+    {
+      "uid": "usr_mwuxws04_a5r4r",
+      "name": "haarry",
+      "email": "harry@gmail.com",
+      "password": "Harsh@123",
+      "role": "host",
+      "college": "Event Counsler",
+      "phone": "6266626266",
+      "photoURL": "https://api.dicebear.com/7.x/bottts/svg?seed=haarry",
+      "authProvider": "email",
+      "createdAt": "2026-11-24T16:59:46.756Z"
     }
   ],
   "payouts": [
@@ -582,6 +656,25 @@
       "studentName": "Harsh",
       "studentEmail": "harshshakya9084331@gmail.com",
       "timestamp": "2026-11-24T16:27:15.857Z",
+      "isLive": true
+    },
+    {
+      "paymentId": "pay_U45Tz1L15iTySF",
+      "orderId": "order_U45TpwfUy5Pdh8",
+      "amount": 2,
+      "currency": "INR",
+      "status": "captured",
+      "method": "upi",
+      "vpa": "8077827705-1@naviaxis",
+      "eventId": "evt-mwuxx8ba-fq55",
+      "eventTitle": "makhi",
+      "hostId": "usr_mwuxws04_a5r4r",
+      "hostEmail": "harry@gmail.com",
+      "quantity": 2,
+      "userId": "usr_mwuufh48_9lr88",
+      "studentName": "Harsh",
+      "studentEmail": "harshshakya9084331@gmail.com",
+      "timestamp": "2026-11-24T17:01:23.800Z",
       "isLive": true
     }
   ],
