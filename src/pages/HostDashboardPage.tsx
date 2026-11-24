@@ -132,6 +132,16 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     return StorageService.getHostEvents(organizerId, organizerEmail);
   }, [events, organizerId, organizerEmail]);
 
+  // Keep every host event (with its Gate PIN) synced to backend server so volunteers can validate PINs from any device
+  useEffect(() => {
+    if (!hostEvents.length) return;
+    hostEvents.forEach((evt) => {
+      if (evt.gatePin && /^\d{6}$/.test(String(evt.gatePin).trim())) {
+        void StorageService.syncEventToServerAsync(evt);
+      }
+    });
+  }, [hostEvents]);
+
   // Filter tickets strictly by the current user's organizer ID or email
   const hostTickets = useMemo(() => {
     if (!organizerId && !organizerEmail) return [];
@@ -218,6 +228,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
   const openVolunteerShare = async (evt: CollegeEvent) => {
     if (evt.gatePin && /^\d{6}$/.test(String(evt.gatePin).trim())) {
       setQrModalEvent(evt);
+      void StorageService.syncEventToServerAsync(evt);
       return;
     }
     const updated = await StorageService.ensureEventGatePin(
@@ -226,6 +237,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
       currentUser?.email
     );
     if (updated) {
+      void StorageService.syncEventToServerAsync(updated);
       onEventsUpdated();
       setQrModalEvent(updated);
     } else {

@@ -625,7 +625,9 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           if (pin.length !== 6) {
             return sendJson(res, 400, { valid: false, error: 'Please enter a valid 6-digit numeric Gate PIN.' });
           }
-          const matchedEvent = db.events.find((e) => e.gatePin === pin && e.status !== 'cancelled');
+          const matchedEvent = db.events.find(
+            (e) => String(e?.gatePin || '').trim() === pin && e.status !== 'cancelled'
+          );
           if (!matchedEvent) {
             return sendJson(res, 404, { valid: false, error: 'Invalid or inactive Gate PIN. Please check with your organizer.' });
           }
@@ -644,7 +646,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               ticketsSold: matchedEvent.ticketsSold,
               availableTickets: matchedEvent.availableTickets,
               status: matchedEvent.status,
-              gatePin: matchedEvent.gatePin,
+              gatePin: String(matchedEvent.gatePin).trim(),
               imageUrl: matchedEvent.imageUrl,
             },
           });
@@ -657,7 +659,9 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           if (!eventId || pin.length !== 6) {
             return sendJson(res, 400, { error: 'eventId and 6-digit pin are required.' });
           }
-          const event = db.events.find((e) => e.eventId === eventId && e.gatePin === pin && e.status !== 'cancelled');
+          const event = db.events.find(
+            (e) => e.eventId === eventId && String(e?.gatePin || '').trim() === pin && e.status !== 'cancelled'
+          );
           if (!event) {
             return sendJson(res, 403, { error: 'Unauthorized: Invalid Gate PIN for this event.' });
           }
@@ -833,13 +837,24 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
         if (url === '/api/tickets/verify' && req.method === 'POST') {
           const body = await parseBody(req);
           const { qrToken, ticketId, hostId, hostEmail, volunteerGatePin, eventId: targetEventId } = body;
-          const token = (qrToken || ticketId || '').trim();
+          let token = (qrToken || ticketId || '').trim();
+          if (token.startsWith('{') && token.endsWith('}')) {
+            try {
+              const parsedQr = JSON.parse(token);
+              token = String(parsedQr.qrToken || parsedQr.ticketId || token).trim();
+            } catch {}
+          }
 
           if (!token) {
             return sendJson(res, 400, { success: false, error: 'QR Token or Ticket ID is required', code: 'INVALID_TOKEN' });
           }
 
-          const ticket = db.tickets.find((t: any) => t.qrToken === token || t.ticketId === token);
+          const tokenUpper = token.toUpperCase();
+          const ticket = db.tickets.find(
+            (t: any) =>
+              String(t?.qrToken || '').trim() === token ||
+              String(t?.ticketId || '').trim().toUpperCase() === tokenUpper
+          );
           if (!ticket) {
             return sendJson(res, 404, { success: false, error: 'Invalid Ticket QR. No matching ticket found in database.', code: 'INVALID_TOKEN' });
           }
@@ -847,9 +862,15 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           const event = db.events.find((e: any) => e.eventId === ticket.eventId);
 
           if (volunteerGatePin && targetEventId) {
-            const targetEvent = db.events.find((e: any) => e.eventId === targetEventId && e.gatePin === volunteerGatePin.trim());
+            const cleanVolPin = String(volunteerGatePin).trim();
+            const targetEvent = db.events.find(
+              (e: any) => e.eventId === targetEventId && String(e?.gatePin || '').trim() === cleanVolPin
+            );
             if (!targetEvent) {
               return sendJson(res, 403, { success: false, error: 'Invalid volunteer gate PIN for this event', code: 'WRONG_HOST_OR_EVENT' });
+            }
+            if (targetEvent.status === 'cancelled') {
+              return sendJson(res, 400, { success: false, error: 'This event has been cancelled.', code: 'TICKET_CANCELLED' });
             }
             if (ticket.eventId !== targetEventId) {
               const eventName = ticket.eventTitle || event?.title || 'an event';
@@ -905,6 +926,9 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           ticket.entryTime = nowDisplay;
           ticket.entryTimestamp = now.toISOString();
           ticket.verifiedBy = volunteerGatePin ? 'volunteer' : 'organizer';
+          if (volunteerGatePin) {
+            ticket.volunteerPin = String(volunteerGatePin).trim();
+          }
           ticket.exitStatus = 'not_exited';
           saveDatabase(db);
 

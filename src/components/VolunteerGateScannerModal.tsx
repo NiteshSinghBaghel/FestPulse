@@ -49,6 +49,8 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
   const [gatePinInput, setGatePinInput] = useState<string>(initialGatePin);
   const [activeEvent, setActiveEvent] = useState<CollegeEvent | null>(null);
   const [pinError, setPinError] = useState<string>('');
+  const [isValidatingPin, setIsValidatingPin] = useState<boolean>(false);
+  const [isGateQrMode, setIsGateQrMode] = useState<boolean>(false);
 
   // Scanning & Feedback state
   const [feedbackState, setFeedbackState] = useState<FeedbackType>(null);
@@ -80,12 +82,22 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
   const isScanningActiveRef = useRef<boolean>(true);
   const feedbackTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Pre-fill initial PIN if passed
+  // Reset transient feedback when closed; pre-fill initial PIN if passed
   useEffect(() => {
-    if (isOpen && initialGatePin && initialGatePin.trim().length === 6) {
-      const pin = initialGatePin.trim();
-      setGatePinInput(pin);
-      void handleValidatePin(pin);
+    if (!isOpen) {
+      setFeedbackState(null);
+      setActiveScannedTicket(null);
+      setPinError('');
+      setIsGateQrMode(false);
+      setManualTokenInput('');
+      return;
+    }
+    if (initialGatePin) {
+      const pin = StorageService.extractGatePin(initialGatePin);
+      if (/^\d{6}$/.test(pin)) {
+        setGatePinInput(pin);
+        void handleValidatePin(pin);
+      }
     }
   }, [initialGatePin, isOpen]);
 
@@ -160,30 +172,37 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
     } catch {}
   };
 
-  // Validate the entered 6-digit gate PIN via server & local cache
+  // Validate the entered 6-digit gate PIN via server, local cache & Firestore
   const handleValidatePin = async (pinToTest?: string) => {
     setPinError('');
-    const target = (pinToTest || gatePinInput).trim();
-    if (target.length !== 6) {
+    const target = StorageService.extractGatePin(pinToTest ?? gatePinInput);
+    if (!/^\d{6}$/.test(target)) {
       setPinError('Please enter a valid 6-digit numeric Gate PIN');
       return;
     }
 
-    const matchedEvent = await StorageService.validateVolunteerGatePinAsync(target);
-    if (!matchedEvent) {
-      setPinError('Invalid or inactive Gate PIN. Please ask your organizer for the active 6-digit code.');
-      setActiveEvent(null);
-      return;
-    }
+    setIsValidatingPin(true);
+    try {
+      const matchedEvent = await StorageService.validateVolunteerGatePinAsync(target);
+      if (!matchedEvent) {
+        setPinError('Invalid or inactive Gate PIN. Please ask your organizer to open Share PIN & QR on their dashboard.');
+        setActiveEvent(null);
+        return;
+      }
 
-    setActiveEvent(matchedEvent);
-    setPinError('');
-    await loadEventEntries(matchedEvent.eventId, matchedEvent.gatePin || target);
+      setGatePinInput(target);
+      setIsGateQrMode(false);
+      setActiveEvent(matchedEvent);
+      setPinError('');
+      await loadEventEntries(matchedEvent.eventId, matchedEvent.gatePin || target);
+    } finally {
+      setIsValidatingPin(false);
+    }
   };
 
-  // Start camera when activeEvent is established and modal is open
+  // Start camera when activeEvent is established OR Stage 1 Gate QR mode is enabled
   useEffect(() => {
-    if (isOpen && activeEvent) {
+    if (isOpen && (activeEvent || isGateQrMode)) {
       isScanningActiveRef.current = true;
       startCamera();
     } else {
@@ -196,7 +215,7 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
         clearTimeout(feedbackTimeoutRef.current);
       }
     };
-  }, [isOpen, activeEvent, facingMode]);
+  }, [isOpen, activeEvent, isGateQrMode, facingMode]);
 
   const startCamera = async (targetFacingMode?: 'environment' | 'user') => {
     stopCamera();
@@ -275,8 +294,21 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
           });
 
           if (code && code.data && code.data.trim()) {
+            const rawQr = code.data.trim();
             isScanningActiveRef.current = false;
-            processToken(code.data.trim());
+            if (!activeEvent && isGateQrMode) {
+              const extractedPin = StorageService.extractGatePin(rawQr);
+              if (/^\d{6}$/.test(extractedPin)) {
+                playSound('success');
+                void handleValidatePin(extractedPin);
+              } else {
+                playSound('error');
+                setPinError('Scanned QR does not contain a valid 6-digit Event Gate PIN.');
+                setIsGateQrMode(false);
+              }
+              return;
+            }
+            processToken(rawQr);
             return;
           }
         } catch {
@@ -479,16 +511,59 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
                 ))}
               </div>
 
-              <div className="pt-2">
+              <div className="pt-2 space-y-2">
                 <button
                   type="submit"
-                  disabled={gatePinInput.length !== 6}
+                  disabled={gatePinInput.length !== 6 || isValidatingPin}
                   className="w-full py-3 px-4 rounded-xl text-sm font-bold bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white shadow-md shadow-amber-600/20 transition flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <KeyRound className="w-4 h-4" />
-                  <span>Unlock Gate Scanner</span>
+                  {isValidatingPin ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <KeyRound className="w-4 h-4" />
+                  )}
+                  <span>{isValidatingPin ? 'Verifying Gate PIN...' : 'Unlock Gate Scanner'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPinError('');
+                    setIsGateQrMode((prev) => !prev);
+                  }}
+                  className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 transition flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Scan className="w-4 h-4 text-indigo-600" />
+                  <span>{isGateQrMode ? 'Hide Event Gate QR Camera' : 'Or Scan Event Gate QR Code'}</span>
                 </button>
               </div>
+
+              {isGateQrMode && (
+                <div className="mt-3 rounded-2xl overflow-hidden border-2 border-indigo-500 bg-black relative">
+                  <video
+                    ref={videoRef}
+                    className="w-full h-48 object-cover"
+                    autoPlay
+                    playsInline
+                    muted
+                  />
+                  <div className="absolute inset-x-0 bottom-0 bg-black/70 text-white text-[11px] font-bold py-1.5 text-center">
+                    Point camera at Host&apos;s Volunteer Gate QR Code
+                  </div>
+                  {cameraError && (
+                    <div className="absolute inset-0 bg-slate-900/90 p-4 flex flex-col items-center justify-center text-white text-xs">
+                      <p className="text-rose-300 font-bold mb-2">{cameraError}</p>
+                      <button
+                        type="button"
+                        onClick={() => startCamera()}
+                        className="px-3 py-1 rounded-lg bg-amber-500 text-slate-950 font-bold"
+                      >
+                        Retry Camera
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </form>
           </div>
         ) : (

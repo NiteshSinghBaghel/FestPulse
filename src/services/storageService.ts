@@ -215,20 +215,45 @@ export class StorageService {
       fbEvents.forEach(e => {
         if (e?.eventId) {
           const prev = eventMap.get(e.eventId);
+          const fbPin = e.gatePin && /^\d{6}$/.test(String(e.gatePin).trim()) ? String(e.gatePin).trim() : '';
+          const prevPin = prev?.gatePin && /^\d{6}$/.test(String(prev.gatePin).trim()) ? String(prev.gatePin).trim() : '';
+          const resolvedPin =
+            prevPin && (!fbPin || fbPin === '100000')
+              ? prevPin
+              : fbPin || prevPin || undefined;
           eventMap.set(
             e.eventId,
             prev
               ? {
                   ...prev,
                   ...e,
-                  gatePin:
-                    (e.gatePin && /^\d{6}$/.test(String(e.gatePin).trim()) ? String(e.gatePin).trim() : undefined) ||
-                    prev.gatePin,
+                  ...(resolvedPin ? { gatePin: resolvedPin } : {}),
                 }
               : e
           );
         }
       });
+
+      // Ensure host events from Firestore or local cache are also registered on the backend API server (so unauthenticated volunteer PIN lookups succeed)
+      if (serverSyncOk && hasSession && activeRole === 'host') {
+        const srvById = new Map(srvEvents.map(se => [se.eventId, se]));
+        Array.from(eventMap.values()).forEach((evt) => {
+          const isOwned = Boolean(
+            (activeUid && evt.hostId === activeUid) ||
+            (activeEmail && evt.hostEmail && evt.hostEmail.toLowerCase().trim() === activeEmail)
+          );
+          if (!isOwned) return;
+          const srvEvt = srvById.get(evt.eventId);
+          if (!srvEvt || (evt.gatePin && srvEvt.gatePin !== evt.gatePin)) {
+            fetch('/api/events', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(evt),
+            }).catch(() => {});
+          }
+        });
+      }
+
       this.saveEvents(Array.from(eventMap.values()), false);
 
       // Strictly scope tickets to the logged-in user/host (zero cross-user leakage)
@@ -549,6 +574,24 @@ export class StorageService {
     return updated;
   }
 
+  static async syncEventToServerAsync(evt: CollegeEvent): Promise<CollegeEvent> {
+    if (!evt?.eventId) return evt;
+    try {
+      const res = await fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(evt),
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data?.event) {
+          return { ...evt, ...data.event };
+        }
+      }
+    } catch {}
+    return evt;
+  }
+
   /**
    * Ensures an event has a valid 6-digit volunteer Gate PIN, generating & persisting one if missing.
    */
@@ -865,24 +908,34 @@ export class StorageService {
     return this.getTickets().find(t => t.qrToken === token || t.ticketId === token);
   }
 
+  static extractGatePin(rawInput: string): string {
+    const trimmed = (rawInput || '').trim();
+    if (!trimmed) return '';
+    const urlMatch = trimmed.match(/[?&](?:gatePin|volunteerGatePin)=(\d{6})\b/i);
+    if (urlMatch?.[1]) return urlMatch[1];
+    const digits = trimmed.replace(/\D/g, '');
+    if (digits.length === 6) return digits;
+    return trimmed;
+  }
+
   /**
    * Validates a 6-digit volunteer gate passcode and returns the associated event.
    * Protects organizer privacy: Gives zero access to organizer revenue, payouts, bank details, or editing.
    */
   static validateVolunteerGatePin(gatePin: string): CollegeEvent | null {
-    if (!gatePin) return null;
-    const cleanPin = gatePin.trim();
-    if (cleanPin.length !== 6) return null;
+    const cleanPin = this.extractGatePin(gatePin);
+    if (!/^\d{6}$/.test(cleanPin)) return null;
     const events = this.getEvents();
-    const event = events.find(e => e.gatePin === cleanPin);
+    const event = events.find(e => String(e?.gatePin || '').trim() === cleanPin);
     if (!event || event.status === 'cancelled') return null;
     return event;
   }
 
   static async validateVolunteerGatePinAsync(gatePin: string): Promise<CollegeEvent | null> {
-    if (!gatePin) return null;
-    const cleanPin = gatePin.trim();
-    if (cleanPin.length !== 6) return null;
+    const cleanPin = this.extractGatePin(gatePin);
+    if (!/^\d{6}$/.test(cleanPin)) return null;
+
+    // 1. Check authoritative backend server endpoint first
     try {
       const res = await fetch(`/api/volunteer/validate-pin?pin=${encodeURIComponent(cleanPin)}`);
       if (res.ok) {
@@ -890,29 +943,64 @@ export class StorageService {
         if (data?.valid && data?.event) {
           return data.event as CollegeEvent;
         }
-      } else if (res.status === 404 || res.status === 400) {
-        return null;
       }
     } catch {}
-    return this.validateVolunteerGatePin(cleanPin);
+
+    // 2. Fallback: Check local browser cache (e.g., offline or newly created event pending server sync)
+    const localMatch = this.validateVolunteerGatePin(cleanPin);
+    if (localMatch) {
+      void this.syncEventToServerAsync(localMatch);
+      return localMatch;
+    }
+
+    // 3. Fallback: Query Firestore directly if user is signed in
+    try {
+      const fbMatch = await FirebaseDbService.findEventByGatePin(cleanPin);
+      if (fbMatch) {
+        void this.syncEventToServerAsync(fbMatch);
+        return fbMatch;
+      }
+    } catch {}
+
+    return null;
   }
 
   static async fetchVolunteerEventEntriesAsync(eventId: string, gatePin: string): Promise<Ticket[]> {
-    if (!eventId || !gatePin || gatePin.trim().length !== 6) return [];
+    const cleanPin = this.extractGatePin(gatePin);
+    if (!eventId || !/^\d{6}$/.test(cleanPin)) return [];
+    let serverRows: Ticket[] = [];
     try {
-      const res = await fetch(`/api/volunteer/tickets?eventId=${encodeURIComponent(eventId)}&pin=${encodeURIComponent(gatePin.trim())}`);
+      const res = await fetch(`/api/volunteer/tickets?eventId=${encodeURIComponent(eventId)}&pin=${encodeURIComponent(cleanPin)}`);
       if (res.ok) {
         const rows = await res.json();
-        if (Array.isArray(rows)) return rows as Ticket[];
+        if (Array.isArray(rows)) serverRows = rows as Ticket[];
       }
     } catch {}
-    return this.getTickets()
-      .filter(t => t.eventId === eventId && t.entryStatus === 'entered')
-      .sort((a, b) => {
-        const tb = b.entryTimestamp ? new Date(b.entryTimestamp).getTime() : 0;
-        const ta = a.entryTimestamp ? new Date(a.entryTimestamp).getTime() : 0;
-        return tb - ta;
-      });
+
+    const localRows = this.getTickets().filter(
+      t => t.eventId === eventId && t.entryStatus === 'entered'
+    );
+    const merged = new Map<string, Ticket>();
+    localRows.forEach(t => merged.set(t.ticketId, t));
+    serverRows.forEach(t => merged.set(t.ticketId, t));
+
+    return Array.from(merged.values()).sort((a, b) => {
+      const tb = b.entryTimestamp ? new Date(b.entryTimestamp).getTime() : 0;
+      const ta = a.entryTimestamp ? new Date(a.entryTimestamp).getTime() : 0;
+      if (tb !== ta) return tb - ta;
+      return (b.entryTime || '').localeCompare(a.entryTime || '');
+    });
+  }
+
+  private static normalizeScanToken(rawToken: string): string {
+    let clean = (rawToken || '').trim();
+    if (clean.startsWith('{') && clean.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(clean);
+        clean = String(parsed.qrToken || parsed.ticketId || clean).trim();
+      } catch {}
+    }
+    return clean;
   }
 
   static async verifyVolunteerScanAsync(
@@ -920,8 +1008,8 @@ export class StorageService {
     gatePin: string,
     targetEventId: string
   ): Promise<ScannerScanResult> {
-    const cleanToken = (qrToken || '').trim();
-    const cleanPin = (gatePin || '').trim();
+    const cleanToken = this.normalizeScanToken(qrToken);
+    const cleanPin = this.extractGatePin(gatePin);
     if (!cleanToken) {
       return { success: false, message: 'QR Token or Ticket ID is required.', code: 'INVALID_TOKEN' };
     }
@@ -938,17 +1026,52 @@ export class StorageService {
       const data = await res.json().catch(() => null);
       if (data && typeof data.success === 'boolean') {
         if (data.success && data.ticket) {
+          // Keep local cache & Firestore synchronized immediately
+          const localTickets = this.getTickets();
+          const idx = localTickets.findIndex(t => t.ticketId === data.ticket.ticketId);
+          if (idx >= 0) {
+            localTickets[idx] = { ...localTickets[idx], ...data.ticket };
+            this.saveTickets(localTickets);
+          }
+          FirebaseDbService.updateTicket(data.ticket.ticketId, {
+            entryStatus: 'entered',
+            entryTime: data.ticket.entryTime,
+            entryTimestamp: data.ticket.entryTimestamp,
+            verifiedBy: 'volunteer',
+            volunteerPin: cleanPin,
+          }).catch(() => {});
           broadcastTabUpdate('tickets');
+          return {
+            success: true,
+            message: data.message || 'Verification completed.',
+            ticket: data.ticket,
+            code: data.code,
+          };
         }
-        return {
-          success: data.success,
-          message: data.message || data.error || 'Verification completed.',
-          ticket: data.ticket,
-          code: data.code,
-        };
+
+        // Only return authoritative rejection immediately if server found the ticket or denied PIN/event;
+        // if server returned INVALID_TOKEN (404), fall back to local/Firestore ticket cache before rejecting.
+        if (data.code && data.code !== 'INVALID_TOKEN') {
+          return {
+            success: false,
+            message: data.message || data.error || 'Verification rejected.',
+            ticket: data.ticket,
+            code: data.code,
+          };
+        }
       }
     } catch {}
-    return this.verifyVolunteerScan(cleanToken, cleanPin, targetEventId);
+
+    const localResult = this.verifyVolunteerScan(cleanToken, cleanPin, targetEventId);
+    if (localResult.success && localResult.ticket) {
+      // Ensure server ledger also receives locally verified ticket
+      fetch('/api/tickets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(localResult.ticket),
+      }).catch(() => {});
+    }
+    return localResult;
   }
 
   static async authenticateCredentialAsync(
@@ -986,11 +1109,11 @@ export class StorageService {
     gatePin: string,
     targetEventId: string
   ): ScannerScanResult {
-    const cleanToken = (qrToken || '').trim();
-    const cleanPin = (gatePin || '').trim();
+    const cleanToken = this.normalizeScanToken(qrToken);
+    const cleanPin = this.extractGatePin(gatePin);
     const event = this.getEventById(targetEventId);
 
-    if (!event || event.gatePin !== cleanPin) {
+    if (!event || String(event.gatePin || '').trim() !== cleanPin) {
       return {
         success: false,
         message: 'Invalid Gate PIN session. Scanner expired or unauthorized.',
@@ -999,7 +1122,12 @@ export class StorageService {
     }
 
     const tickets = this.getTickets();
-    const ticketIndex = tickets.findIndex(t => t.qrToken === cleanToken || t.ticketId === cleanToken);
+    const cleanTokenUpper = cleanToken.toUpperCase();
+    const ticketIndex = tickets.findIndex(
+      t =>
+        String(t.qrToken || '').trim() === cleanToken ||
+        String(t.ticketId || '').trim().toUpperCase() === cleanTokenUpper
+    );
 
     if (ticketIndex === -1) {
       return {

@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CollegeEvent, Ticket } from '../types';
 import { PaymentModal } from '../components/PaymentModal';
 import { VolunteerGateShareModal } from '../components/VolunteerGateShareModal';
+import { StorageService } from '../services/storageService';
 import { useAuth } from '../context/AuthContext';
 import { 
   ArrowLeft, 
@@ -34,6 +35,13 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+
+  useEffect(() => {
+    setDisplayGatePin(event.gatePin || '');
+    if (isHost && event.gatePin && /^\d{6}$/.test(String(event.gatePin).trim())) {
+      void StorageService.syncEventToServerAsync(event);
+    }
+  }, [event.eventId, event.gatePin, isHost]);
 
   const percentBooked = Math.round((event.ticketsSold / event.capacity) * 100);
   const isSoldOut = event.status === 'sold_out' || event.availableTickets <= 0;

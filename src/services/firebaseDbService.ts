@@ -238,6 +238,32 @@ export class FirebaseDbService {
     }
   }
 
+  static async findEventByGatePin(gatePin: string): Promise<CollegeEvent | null> {
+    const cleanPin = (gatePin || '').trim();
+    if (!/^\d{6}$/.test(cleanPin)) return null;
+    const activeUid = this.getActiveFirebaseUid();
+    if (!isFirebaseInitialized || !db || !activeUid) return null;
+    try {
+      const colRef = collection(db, COLLECTIONS.EVENTS);
+      const q = query(
+        colRef,
+        where('status', 'in', ['published', 'sold_out']),
+        where('gatePin', '==', cleanPin)
+      );
+      const snap = await getDocs(q);
+      for (const docSnap of snap.docs) {
+        const evt = normalizeEvent(docSnap.data(), docSnap.id);
+        if (evt && String(evt.gatePin || '').trim() === cleanPin && evt.status !== 'cancelled') {
+          return evt;
+        }
+      }
+      return null;
+    } catch (error) {
+      console.warn('Firestore findEventByGatePin warning:', error);
+      return null;
+    }
+  }
+
   // ================= TICKETS (STRICTLY SCOPED) =================
   static async getTickets(userId?: string, role: 'user' | 'host' = 'user'): Promise<Ticket[]> {
     const activeUid = this.getActiveFirebaseUid();
