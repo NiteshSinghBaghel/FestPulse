@@ -32,7 +32,7 @@
       "ticketsSold": 1,
       "availableTickets": 199,
       "createdAt": "2026-11-24T16:26:10.954Z",
-      "updatedAt": "2026-11-24T16:27:15.867Z"
+      "updatedAt": "2026-11-24T16:50:47.765Z"
     },
     {
       "hostId": "demo_host_uid",
@@ -66,7 +66,7 @@
       "ticketsSold": 0,
       "availableTickets": 200,
       "createdAt": "2026-11-24T15:17:10.104Z",
-      "updatedAt": "2026-11-24T16:26:10.968Z"
+      "updatedAt": "2026-11-24T16:50:47.775Z"
     },
     {
       "eventId": "evt_test_B_1793622679023",
@@ -148,7 +148,7 @@
       "ticketsSold": 2,
       "availableTickets": 198,
       "createdAt": "2026-10-12T15:22:04.888Z",
-      "updatedAt": "2026-11-24T16:26:10.976Z",
+      "updatedAt": "2026-11-24T16:50:47.784Z",
       "gatePin": "613984"
     }
   ],
@@ -435,7 +435,7 @@
       "authProvider": "google",
       "createdAt": "2026-10-12T15:21:24.481Z",
       "password": "HostNewPass2026!",
-      "updatedAt": "2026-11-24T16:25:27.572Z"
+      "updatedAt": "2026-11-24T16:46:58.242Z"
     },
     {
       "uid": "usr_mvi6t981_a2o34",
