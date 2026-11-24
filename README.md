@@ -9,7 +9,6 @@
 - `src/server` - Vite API server plugin and PostgreSQL service. The backend is integrated into the main app process; no separate `backend` package or start command is required.
 - `src/types` - Shared TypeScript types.
 - `src/utils` - Shared routing and utility helpers.
-- `data/campuspass_db.json` - Local development persistence.
 
 A production-style mobile-first college event discovery and ticketing platform built with React, Vite, TypeScript, Tailwind CSS, Lucide icons, Canvas Confetti, and QR code token verification.
 

@@ -6,8 +6,6 @@ import type { Plugin, Connect } from 'vite';
 import { PostgresService, POSTGRES_SCHEMA_SQL } from './postgresService';
 import { MongoDbService } from './mongoService';
 
-const DB_FILE_PATH = path.resolve(process.cwd(), 'data/campuspass_db.json');
-
 function getEnvKey(key: string, defaultVal: string): string {
   try {
     const envPaths = [
@@ -124,90 +122,23 @@ let hasHydratedFromPostgres = false;
 
 function loadDatabase(): DatabaseSchema {
   const defaultRzpConfig = readEnvRazorpayConfig();
-
-  try {
-    if (!fs.existsSync(DB_FILE_PATH)) {
-      const dir = path.dirname(DB_FILE_PATH);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      const initial: DatabaseSchema = {
-        events: [],
-        tickets: [],
-        accounts: [],
-        payouts: [],
-        payments: [],
-        razorpayConfig: defaultRzpConfig,
-        flushedAt: Date.now(),
-        supabaseConfig: { url: '', anonKey: '', enabled: false },
-        passwordResetTokens: {},
-        hostPayoutProfiles: {},
-      };
-      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(initial, null, 2), 'utf8');
-      return initial;
-    }
-    const raw = fs.readFileSync(DB_FILE_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
-    const storedRzp = parsed.razorpayConfig;
-    const hasEnvCredentials = Boolean(defaultRzpConfig.keyId && defaultRzpConfig.keySecret);
-    const useStored = Boolean(
-      !hasEnvCredentials &&
-      storedRzp &&
-      storedRzp.updatedViaUi &&
-      storedRzp.keyId &&
-      !isLegacyDemoKeyId(storedRzp.keyId) &&
-      !isLegacyDemoSecret(storedRzp.keySecret)
-    );
-    const eventsList: any[] = Array.isArray(parsed.events) ? parsed.events : [];
-    const pinSnapshot = eventsList.map((e) => String(e?.gatePin || '').trim());
-    backfillEventGatePins(eventsList);
-    const backfilledPins = eventsList.some((e, i) => String(e?.gatePin || '').trim() !== pinSnapshot[i]);
-
-    const dbState: DatabaseSchema = {
-      events: eventsList,
-      tickets: Array.isArray(parsed.tickets) ? parsed.tickets : [],
-      accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
-      payouts: Array.isArray(parsed.payouts) ? parsed.payouts : [],
-      payments: Array.isArray(parsed.payments) ? parsed.payments : [],
-      razorpayConfig: useStored ? storedRzp : defaultRzpConfig,
-      flushedAt: typeof parsed.flushedAt === 'number' ? parsed.flushedAt : 0,
-      supabaseConfig: parsed.supabaseConfig || { url: '', anonKey: '', enabled: false },
-      passwordResetTokens: parsed.passwordResetTokens || {},
-      hostPayoutProfiles: parsed.hostPayoutProfiles && typeof parsed.hostPayoutProfiles === 'object' ? parsed.hostPayoutProfiles : {},
-    };
-    if (backfilledPins) {
-      saveDatabase(dbState);
-    }
-    return dbState;
-  } catch (error) {
-    console.error('[API Server] Error loading database:', error);
-    return {
-      events: [],
-      tickets: [],
-      accounts: [],
-      payouts: [],
-      payments: [],
-      razorpayConfig: defaultRzpConfig,
-      flushedAt: 0,
-      supabaseConfig: { url: '', anonKey: '', enabled: false },
-      hostPayoutProfiles: {},
-    };
-  }
+  return {
+    events: [],
+    tickets: [],
+    accounts: [],
+    payouts: [],
+    payments: [],
+    razorpayConfig: defaultRzpConfig,
+    flushedAt: 0,
+    supabaseConfig: { url: '', anonKey: '', enabled: false },
+    passwordResetTokens: {},
+    hostPayoutProfiles: {},
+  };
 }
 
 function saveDatabase(data: DatabaseSchema): boolean {
-  try {
-    const dir = path.dirname(DB_FILE_PATH);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(DB_FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
-    void MongoDbService.saveSnapshot(data);
-    return true;
-  } catch (error) {
-    console.error('[API Server] Error saving database:', error);
-    return false;
-  }
+  void MongoDbService.saveSnapshot(data);
+  return true;
 }
 
 async function parseRawBody(req: Connect.IncomingMessage): Promise<{ raw: string; json: any }> {
