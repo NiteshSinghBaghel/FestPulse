@@ -78,6 +78,43 @@ function readEnvRazorpayConfig(): RazorpayConfigSchema {
   };
 }
 
+function backfillEventGatePins(eventsList: any[]): any[] {
+  if (!Array.isArray(eventsList)) return [];
+  const usedPins = new Set<string>(
+    eventsList
+      .map((e) => String(e?.gatePin || '').trim())
+      .filter((p) => /^\d{6}$/.test(p))
+  );
+  for (const evt of eventsList) {
+    if (evt && typeof evt === 'object' && !/^\d{6}$/.test(String(evt.gatePin || '').trim())) {
+      let nextPin = '';
+      for (let attempt = 0; attempt < 25; attempt++) {
+        const candidate = Math.floor(100000 + Math.random() * 900000).toString();
+        if (!usedPins.has(candidate)) {
+          nextPin = candidate;
+          break;
+        }
+      }
+      if (!nextPin) nextPin = Math.floor(100000 + Math.random() * 900000).toString();
+      usedPins.add(nextPin);
+      evt.gatePin = nextPin;
+    }
+  }
+  return eventsList;
+}
+
+function getConfiguredDatabaseUrl(): string {
+  return (
+    getEnvKey('DATABASE_URL', '') ||
+    getEnvKey('POSTGRES_URL', '') ||
+    getEnvKey('NEON_DATABASE_URL', '') ||
+    getEnvKey('SUPABASE_DB_URL', '')
+  ).trim();
+}
+
+let manuallyDisconnectedPostgres = false;
+let hasHydratedFromPostgres = false;
+
 function loadDatabase(): DatabaseSchema {
   const defaultRzpConfig = readEnvRazorpayConfig();
 
@@ -115,28 +152,9 @@ function loadDatabase(): DatabaseSchema {
       !isLegacyDemoSecret(storedRzp.keySecret)
     );
     const eventsList: any[] = Array.isArray(parsed.events) ? parsed.events : [];
-    const usedPins = new Set<string>(
-      eventsList
-        .map((e) => String(e?.gatePin || '').trim())
-        .filter((p) => /^\d{6}$/.test(p))
-    );
-    let backfilledPins = false;
-    for (const evt of eventsList) {
-      if (evt && typeof evt === 'object' && !/^\d{6}$/.test(String(evt.gatePin || '').trim())) {
-        let nextPin = '';
-        for (let attempt = 0; attempt < 25; attempt++) {
-          const candidate = Math.floor(100000 + Math.random() * 900000).toString();
-          if (!usedPins.has(candidate)) {
-            nextPin = candidate;
-            break;
-          }
-        }
-        if (!nextPin) nextPin = Math.floor(100000 + Math.random() * 900000).toString();
-        usedPins.add(nextPin);
-        evt.gatePin = nextPin;
-        backfilledPins = true;
-      }
-    }
+    const pinSnapshot = eventsList.map((e) => String(e?.gatePin || '').trim());
+    backfillEventGatePins(eventsList);
+    const backfilledPins = eventsList.some((e, i) => String(e?.gatePin || '').trim() !== pinSnapshot[i]);
 
     const dbState: DatabaseSchema = {
       events: eventsList,
@@ -366,6 +384,44 @@ function broadcastRealtime(type: string, meta?: Record<string, any>) {
   }
 }
 
+async function hydrateDbFromPostgres(db: DatabaseSchema): Promise<boolean> {
+  if (!PostgresService.getConnected()) return false;
+  try {
+    const pgData = await PostgresService.hydrateAll();
+    if (!pgData) return false;
+
+    const remoteTotal =
+      pgData.events.length +
+      pgData.tickets.length +
+      pgData.accounts.length +
+      pgData.payouts.length +
+      pgData.payments.length +
+      Object.keys(pgData.hostPayoutProfiles || {}).length;
+
+    if (remoteTotal > 0) {
+      const beforePins = pgData.events.map((e) => String(e?.gatePin || '').trim());
+      backfillEventGatePins(pgData.events);
+      for (let i = 0; i < pgData.events.length; i++) {
+        if (String(pgData.events[i]?.gatePin || '').trim() !== beforePins[i]) {
+          PostgresService.upsertEvent(pgData.events[i]).catch(() => {});
+        }
+      }
+      db.events = pgData.events;
+      db.tickets = pgData.tickets;
+      db.accounts = pgData.accounts;
+      db.payouts = pgData.payouts;
+      db.payments = pgData.payments;
+      db.hostPayoutProfiles = pgData.hostPayoutProfiles || {};
+      saveDatabase(db);
+      return true;
+    }
+    return false;
+  } catch (pgErr) {
+    console.warn('[Postgres] Hydrate warning:', pgErr);
+    return false;
+  }
+}
+
 const apiMiddleware = async (req: any, res: any, next: any) => {
   const url = req.url || '';
   if (!url.startsWith('/api/')) {
@@ -416,16 +472,38 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
   try {
     const db = loadDatabase();
 
+    // Auto-connect permanent PostgreSQL database when DATABASE_URL / POSTGRES_URL is configured
+    if (!manuallyDisconnectedPostgres) {
+      const configuredPgUrl = getConfiguredDatabaseUrl();
+      if (configuredPgUrl) {
+        const connected = await PostgresService.ensureAutoConnected(configuredPgUrl, {
+          events: db.events,
+          tickets: db.tickets,
+          accounts: db.accounts,
+          payouts: db.payouts,
+          payments: db.payments,
+          hostPayoutProfiles: db.hostPayoutProfiles,
+        });
+        if (connected && !hasHydratedFromPostgres) {
+          await hydrateDbFromPostgres(db);
+          hasHydratedFromPostgres = true;
+        }
+      }
+    }
+
           // 1. Health check
         if (url === '/api/health' && req.method === 'GET') {
           const pgStatus = await PostgresService.getStatus();
           return sendJson(res, 200, {
             status: 'ok',
             database: pgStatus.connected ? 'postgresql' : 'local_json',
+            storageMode: pgStatus.connected ? 'postgresql_permanent' : 'local_json_ephemeral',
             postgres: pgStatus,
             eventsCount: db.events.length,
             ticketsCount: db.tickets.length,
             accountsCount: db.accounts.length,
+            payoutsCount: db.payouts.length,
+            paymentsCount: db.payments.length,
             timestamp: new Date().toISOString(),
           });
         }
@@ -439,7 +517,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
         if (url === '/api/postgres/schema' && req.method === 'GET') {
           return sendJson(res, 200, {
             schemaSql: POSTGRES_SCHEMA_SQL,
-            tables: ['events', 'tickets', 'accounts', 'payouts'],
+            tables: ['events', 'tickets', 'accounts', 'payouts', 'payments', 'host_payout_profiles'],
           });
         }
 
@@ -451,18 +529,23 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               return sendJson(res, 400, { success: false, error: 'Connection string is required' });
             }
 
+            manuallyDisconnectedPostgres = false;
             const connectResult = await PostgresService.connect(connectionString, true);
             if (!connectResult.success) {
               return sendJson(res, 400, connectResult);
             }
 
-            // Auto-migrate current memory/JSON data into PostgreSQL
+            // Auto-migrate current memory/JSON data into PostgreSQL, then hydrate combined records
             const migrationResult = await PostgresService.migrateFromData({
               events: db.events,
               tickets: db.tickets,
               accounts: db.accounts,
               payouts: db.payouts,
+              payments: db.payments,
+              hostPayoutProfiles: db.hostPayoutProfiles,
             });
+            await hydrateDbFromPostgres(db);
+            hasHydratedFromPostgres = true;
 
             const status = await PostgresService.getStatus();
             return sendJson(res, 200, {
@@ -477,6 +560,8 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
         }
 
         if (url === '/api/postgres/disconnect' && req.method === 'POST') {
+          manuallyDisconnectedPostgres = true;
+          hasHydratedFromPostgres = false;
           await PostgresService.disconnect();
           return sendJson(res, 200, { success: true, message: 'Disconnected from PostgreSQL' });
         }
@@ -491,6 +576,8 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               tickets: db.tickets,
               accounts: db.accounts,
               payouts: db.payouts,
+              payments: db.payments,
+              hostPayoutProfiles: db.hostPayoutProfiles,
             });
             const status = await PostgresService.getStatus();
             return sendJson(res, 200, { success: true, migration, status });
@@ -501,26 +588,9 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
 
         // 2. Scoped synchronization: Return ONLY data permitted for the signed-in user/role
         if ((url === '/api/sync' || url.startsWith('/api/sync?')) && req.method === 'GET') {
-          // If PostgreSQL is connected, hydrate latest state from PostgreSQL
+          // If PostgreSQL is connected, hydrate latest state from PostgreSQL across all tables
           if (PostgresService.getConnected()) {
-            try {
-              const [pgEvents, pgTickets, pgAccounts, pgPayouts] = await Promise.all([
-                PostgresService.getEvents(),
-                PostgresService.getTickets(),
-                PostgresService.getAccounts(),
-                PostgresService.getPayouts(),
-              ]);
-
-              if (pgEvents.length > 0 || pgTickets.length > 0 || pgAccounts.length > 0) {
-                db.events = pgEvents;
-                db.tickets = pgTickets;
-                db.accounts = pgAccounts;
-                db.payouts = pgPayouts;
-                saveDatabase(db);
-              }
-            } catch (pgErr) {
-              console.warn('[Sync] Postgres fetch error:', pgErr);
-            }
+            await hydrateDbFromPostgres(db);
           }
 
           const parsed = new URL(url, 'http://localhost');
@@ -739,7 +809,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             const savedEvent = existingIdx >= 0 ? db.events[existingIdx] : newEvent;
             saveDatabase(db);
             if (PostgresService.getConnected()) {
-              PostgresService.upsertEvent(savedEvent).catch((e: any) => console.warn('Postgres event sync error:', e));
+              await PostgresService.upsertEvent(savedEvent).catch((e: any) => console.warn('Postgres event sync error:', e));
             }
             broadcastRealtime('events', { eventId: savedEvent.eventId });
             return sendJson(res, 200, { success: true, event: savedEvent });
@@ -773,7 +843,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           db.events[idx] = { ...currentEvent, gatePin: nextPin, updatedAt: new Date().toISOString() };
           saveDatabase(db);
           if (PostgresService.getConnected()) {
-            PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres gatePin update error:', e));
+            await PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres gatePin update error:', e));
           }
           broadcastRealtime('events', { eventId });
           return sendJson(res, 200, { success: true, gatePin: nextPin, event: db.events[idx] });
@@ -805,7 +875,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             db.events[idx] = { ...db.events[idx], ...updates, updatedAt: new Date().toISOString() };
             saveDatabase(db);
             if (PostgresService.getConnected()) {
-              PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres event update error:', e));
+              await PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres event update error:', e));
             }
             broadcastRealtime('events', { eventId });
             return sendJson(res, 200, { success: true, event: db.events[idx] });
@@ -826,7 +896,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             db.events = db.events.filter((e) => e.eventId !== eventId);
             saveDatabase(db);
             if (PostgresService.getConnected()) {
-              PostgresService.deleteEvent(eventId).catch((e: any) => console.warn('Postgres event delete error:', e));
+              await PostgresService.deleteEvent(eventId).catch((e: any) => console.warn('Postgres event delete error:', e));
             }
             broadcastRealtime('events', { eventId });
             return sendJson(res, 200, { success: true });
@@ -933,7 +1003,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           saveDatabase(db);
 
           if (PostgresService.getConnected()) {
-            PostgresService.upsertTicket(ticket).catch(() => {});
+            await PostgresService.upsertTicket(ticket).catch(() => {});
           }
 
           broadcastRealtime('tickets', { ticketId: ticket.ticketId, eventId: ticket.eventId });
@@ -993,12 +1063,13 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             } else {
               db.tickets.unshift(newTicket);
             }
+            const savedTicket = existingIdx >= 0 ? db.tickets[existingIdx] : newTicket;
             saveDatabase(db);
             if (PostgresService.getConnected()) {
-              PostgresService.upsertTicket(newTicket).catch((e: any) => console.warn('Postgres ticket sync error:', e));
+              await PostgresService.upsertTicket(savedTicket).catch((e: any) => console.warn('Postgres ticket sync error:', e));
             }
-            broadcastRealtime('tickets', { ticketId: newTicket.ticketId, eventId: newTicket.eventId });
-            return sendJson(res, 200, { success: true, ticket: newTicket });
+            broadcastRealtime('tickets', { ticketId: savedTicket.ticketId, eventId: savedTicket.eventId });
+            return sendJson(res, 200, { success: true, ticket: savedTicket });
           }
         }
 
@@ -1044,7 +1115,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             db.tickets[idx] = { ...db.tickets[idx], ...updates };
             saveDatabase(db);
             if (PostgresService.getConnected()) {
-              PostgresService.upsertTicket(db.tickets[idx]).catch((e: any) => console.warn('Postgres ticket update error:', e));
+              await PostgresService.upsertTicket(db.tickets[idx]).catch((e: any) => console.warn('Postgres ticket update error:', e));
             }
             broadcastRealtime('tickets', { ticketId, eventId: currentTicket.eventId });
             return sendJson(res, 200, { success: true, ticket: db.tickets[idx] });
@@ -1171,7 +1242,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               if (cleanOldEmail && cleanOldEmail !== cleanEmail) {
                 await PostgresService.deleteAccount(cleanOldEmail).catch((e: any) => console.warn('Postgres delete old account error:', e));
               }
-              PostgresService.upsertAccount(savedAccount).catch((e: any) => console.warn('Postgres account sync error:', e));
+              await PostgresService.upsertAccount(savedAccount).catch((e: any) => console.warn('Postgres account sync error:', e));
             }
             broadcastRealtime('accounts', { uid: savedAccount.uid });
             return sendJson(res, 200, { success: true, account: sanitizeAccount(savedAccount) });
@@ -1214,6 +1285,9 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               };
               db.accounts.push(account);
               saveDatabase(db);
+              if (PostgresService.getConnected()) {
+                await PostgresService.upsertAccount(account).catch(() => {});
+              }
             }
 
             if (!account) {
@@ -1452,7 +1526,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             }
             saveDatabase(db);
             if (PostgresService.getConnected()) {
-              PostgresService.insertPayout(payout).catch((e: any) => console.warn('Postgres payout sync error:', e));
+              await PostgresService.insertPayout(payout).catch((e: any) => console.warn('Postgres payout sync error:', e));
             }
             broadcastRealtime('payouts', { payoutId: payout.payoutId, hostId: payout.hostId });
             return sendJson(res, 200, { success: true, payout });
@@ -1570,6 +1644,11 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             }
             db.hostPayoutProfiles[hostId] = profile;
             saveDatabase(db);
+            if (PostgresService.getConnected()) {
+              await PostgresService.upsertPayoutProfile(profile).catch((e: any) =>
+                console.warn('Postgres payout profile sync error:', e)
+              );
+            }
             return sendJson(res, 200, { success: true, profile });
           }
         }
@@ -1930,6 +2009,11 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             }
             db.payments.push(paymentRecord);
             saveDatabase(db);
+            if (PostgresService.getConnected()) {
+              await PostgresService.upsertPayment(paymentRecord).catch((e: any) =>
+                console.warn('Postgres payment sync error:', e)
+              );
+            }
             broadcastRealtime('payments', { paymentId, eventId: paymentRecord.eventId, hostId: resolvedHostId });
 
             return sendJson(res, 200, {
@@ -2124,7 +2208,14 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
 
             saveDatabase(db);
             if (PostgresService.getConnected()) {
-              PostgresService.insertPayout(payoutRecord).catch((e: any) => console.warn('Postgres payout insert error:', e));
+              await PostgresService.insertPayout(payoutRecord).catch((e: any) =>
+                console.warn('Postgres payout insert error:', e)
+              );
+              if (body.saveBankDetails && db.hostPayoutProfiles?.[hostId]) {
+                await PostgresService.upsertPayoutProfile(db.hostPayoutProfiles[hostId]).catch((e: any) =>
+                  console.warn('Postgres payout profile sync error:', e)
+                );
+              }
             }
             broadcastRealtime('payouts', { payoutId: payoutRecord.payoutId, hostId: payoutRecord.hostId });
 
@@ -2173,7 +2264,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               if (!Array.isArray(db.payments)) db.payments = [];
               const existing = db.payments.find((p: any) => p.paymentId === entity.id);
               if (!existing) {
-                db.payments.push({
+                const webhookPayment = {
                   paymentId: entity.id,
                   orderId: entity.order_id || '',
                   amount: Number(entity.amount || 0) / 100,
@@ -2183,8 +2274,14 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
                   vpa: entity.vpa || undefined,
                   timestamp: new Date().toISOString(),
                   isLive: rzp.isLive,
-                });
+                };
+                db.payments.push(webhookPayment);
                 saveDatabase(db);
+                if (PostgresService.getConnected()) {
+                  await PostgresService.upsertPayment(webhookPayment).catch((e: any) =>
+                    console.warn('Postgres webhook payment sync error:', e)
+                  );
+                }
                 broadcastRealtime('payments', { paymentId: entity.id });
               }
             }
