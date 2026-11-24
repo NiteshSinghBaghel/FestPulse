@@ -4,8 +4,7 @@ import { StorageService } from '../services/storageService';
 import { useAuth } from '../context/AuthContext';
 import { EditEventModal } from '../components/EditEventModal';
 import { HostPayoutModal } from '../components/HostPayoutModal';
-import { RazorpaySettingsModal } from '../components/RazorpaySettingsModal';
-import { PaymentService, RazorpayGatewayConfigStatus } from '../services/paymentService';
+import { PaymentService, RazorpayGatewayConfigStatus, ServerHostRevenueSummary } from '../services/paymentService';
 import { PayoutInvoiceModal, downloadPayoutInvoice } from '../components/PayoutInvoiceModal';
 import { TicketSalesAnalyticsChart } from '../components/TicketSalesAnalyticsChart';
 import { VolunteerGateShareModal } from '../components/VolunteerGateShareModal';
@@ -35,7 +34,6 @@ import {
   FileText,
   Download,
   Receipt,
-  CreditCard,
   Zap,
   Settings,
   KeyRound,
@@ -79,12 +77,15 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
   const [editingEvent, setEditingEvent] = useState<CollegeEvent | null>(null);
   const [payoutsVersion, setPayoutsVersion] = useState<number>(0);
   const [isPayoutModalOpen, setIsPayoutModalOpen] = useState(false);
-  const [isGatewaySettingsOpen, setIsGatewaySettingsOpen] = useState(false);
   const [gatewayConfig, setGatewayConfig] = useState<RazorpayGatewayConfigStatus | null>(null);
+  const [serverRevenue, setServerRevenue] = useState<ServerHostRevenueSummary | null>(null);
   const [selectedInvoicePayout, setSelectedInvoicePayout] = useState<PayoutRecord | null>(null);
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
   const [copiedPinEventId, setCopiedPinEventId] = useState<string | null>(null);
   const [qrModalEvent, setQrModalEvent] = useState<CollegeEvent | null>(null);
+
+  const organizerId = currentUser?.uid || '';
+  const organizerEmail = currentUser?.email || '';
 
   const refreshGatewayConfig = () => {
     PaymentService.getRazorpayGatewayConfig()
@@ -106,8 +107,24 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     };
   }, []);
 
-  const organizerId = currentUser?.uid || '';
-  const organizerEmail = currentUser?.email || '';
+  // Fetch authoritative server ledger for the logged-in organizer
+  useEffect(() => {
+    if (!organizerId && !organizerEmail) {
+      setServerRevenue(null);
+      return;
+    }
+    let active = true;
+    PaymentService.getHostRevenueSummary(organizerId, organizerEmail)
+      .then((summary) => {
+        if (active && summary && summary.success) {
+          setServerRevenue(summary);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [organizerId, organizerEmail, payoutsVersion, events]);
 
   // Filter events strictly by the current user's organizer ID or email
   const hostEvents = useMemo(() => {
@@ -121,7 +138,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     return StorageService.getHostTickets(organizerId, organizerEmail);
   }, [organizerId, organizerEmail, hostEvents, payoutsVersion]);
 
-  // Compute Statistics & Financial Revenue strictly by organizer ID
+  // Compute Statistics & Financial Revenue strictly by organizer ID / email, reconciled with server ledger
   const hostRevenueData = useMemo(() => {
     if (!organizerId && !organizerEmail) {
       return {
@@ -135,8 +152,21 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
         availableBalance: 0,
       };
     }
-    return StorageService.getHostRevenue(organizerId, organizerEmail);
-  }, [organizerId, organizerEmail, hostEvents, hostTickets, payoutsVersion]);
+    const localRev = StorageService.getHostRevenue(organizerId, organizerEmail);
+    if (!serverRevenue) return localRev;
+    const totalRev = Math.max(localRev.totalRevenue, serverRevenue.totalRevenue || 0);
+    const totalTrans = Math.max(localRev.totalTransferred, serverRevenue.totalTransferred || 0);
+    return {
+      totalEvents: Math.max(localRev.totalEvents, serverRevenue.totalEvents || 0),
+      totalTicketsSold: Math.max(localRev.totalTicketsSold, serverRevenue.totalTicketsSold || 0),
+      ticketsRevenue: Math.max(localRev.ticketsRevenue, serverRevenue.ticketsRevenue || 0),
+      eventsRevenue: Math.max(localRev.eventsRevenue, serverRevenue.eventsRevenue || 0),
+      totalRevenue: totalRev,
+      totalCheckedIn: Math.max(localRev.totalCheckedIn, serverRevenue.totalCheckedIn || 0),
+      totalTransferred: totalTrans,
+      availableBalance: Math.max(0, totalRev - totalTrans),
+    };
+  }, [organizerId, organizerEmail, hostEvents, hostTickets, payoutsVersion, serverRevenue]);
 
   const {
     totalEvents,
@@ -147,11 +177,18 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     availableBalance,
   } = hostRevenueData;
 
-  // Payouts & Revenue Transfers strictly for this organizer ID
+  // Payouts & Revenue Transfers strictly for this organizer ID / email
   const hostPayouts = useMemo(() => {
-    if (!organizerId) return [];
-    return StorageService.getPayouts(organizerId);
-  }, [organizerId, payoutsVersion, events]);
+    if (!organizerId && !organizerEmail) return [];
+    const localPayouts = StorageService.getPayouts(organizerId, organizerEmail);
+    if (!serverRevenue?.payouts?.length) return localPayouts;
+    const merged = new Map<string, PayoutRecord>();
+    localPayouts.forEach((p) => merged.set(p.payoutId, p));
+    serverRevenue.payouts.forEach((p) => merged.set(p.payoutId, p));
+    return Array.from(merged.values()).sort(
+      (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+    );
+  }, [organizerId, organizerEmail, payoutsVersion, events, serverRevenue]);
 
   // Cancellation Confirmation Modal State
   const [eventToCancel, setEventToCancel] = useState<CollegeEvent | null>(null);
@@ -884,12 +921,12 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                 <ShieldCheck className="w-4 h-4 text-emerald-300 shrink-0" />
                 <span>
                   {gatewayConfig?.isConfigured
-                    ? `${gatewayConfig.isLive ? 'Razorpay Live Production' : 'Razorpay Test Mode'} Active (${gatewayConfig.keyId})`
-                    : 'Razorpay Gateway Not Configured'}
+                    ? `Central Payment Gateway Connected (${gatewayConfig.isLive ? 'Razorpay Live' : 'Razorpay Test'}) • Sold tickets auto-credited to your ledger`
+                    : 'Central Payment Gateway Pending Setup — Add RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET in AI Studio Secrets'}
                 </span>
                 {gatewayConfig?.isConfigured && !gatewayConfig.hasValidPayoutAccount && (
                   <span className="px-2 py-0.5 rounded-full bg-amber-400/20 border border-amber-300/40 text-amber-100 text-[10px] font-bold">
-                    RazorpayX Account Required for Automated Payouts
+                    Backend RazorpayX Account Required for Automated Bank Payouts
                   </span>
                 )}
               </div>
@@ -897,19 +934,11 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setIsGatewaySettingsOpen(true)}
-                  className="py-3 px-4 rounded-2xl bg-white/15 hover:bg-white/25 text-white border border-white/25 font-bold text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <CreditCard className="w-4 h-4" />
-                  <span>Gateway Settings</span>
-                </button>
-                <button
-                  type="button"
                   onClick={() => setIsPayoutModalOpen(true)}
                   className="py-3 px-5 rounded-2xl bg-white hover:bg-emerald-50 text-emerald-900 font-black text-xs transition flex items-center justify-center gap-2 shadow-md active:scale-95 cursor-pointer"
                 >
                   <IndianRupee className="w-4 h-4 text-emerald-700" />
-                  <span>Settle Revenue to UPI / Bank Now</span>
+                  <span>Settle to Bank Account / UPI Now</span>
                   <ArrowRight className="w-4 h-4 text-emerald-700" />
                 </button>
               </div>
@@ -1081,18 +1110,13 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
         isOpen={isPayoutModalOpen}
         onClose={() => setIsPayoutModalOpen(false)}
         availableBalance={availableBalance}
-        onPayoutSuccess={(newPayout) => {
+        totalRevenue={totalRevenue}
+        totalTransferred={totalTransferred}
+        totalTicketsSold={totalTicketsSold}
+        onPayoutSuccess={() => {
           setPayoutsVersion((v) => v + 1);
           onEventsUpdated();
         }}
-        onOpenGatewaySettings={() => setIsGatewaySettingsOpen(true)}
-      />
-
-      {/* Razorpay Live / Test Gateway Configuration Modal */}
-      <RazorpaySettingsModal
-        isOpen={isGatewaySettingsOpen}
-        onClose={() => setIsGatewaySettingsOpen(false)}
-        onConfigSaved={refreshGatewayConfig}
       />
 
       {/* Payout Settlement Invoice View & Download Modal */}

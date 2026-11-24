@@ -15,66 +15,116 @@ import {
   Download, 
   AlertCircle,
   Sparkles,
-  Printer,
-  Settings
+  Printer
 } from 'lucide-react';
 
 interface HostPayoutModalProps {
   isOpen: boolean;
   onClose: () => void;
   availableBalance: number;
+  totalRevenue?: number;
+  totalTransferred?: number;
+  totalTicketsSold?: number;
   onPayoutSuccess: (payout: PayoutRecord) => void;
-  onOpenGatewaySettings?: () => void;
 }
 
 export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
   isOpen,
   onClose,
   availableBalance,
+  totalRevenue,
+  totalTransferred,
+  totalTicketsSold,
   onPayoutSuccess,
-  onOpenGatewaySettings,
 }) => {
   const { currentUser } = useAuth();
 
-  const [transferMethod, setTransferMethod] = useState<'UPI' | 'BANK_TRANSFER'>('UPI');
+  const [transferMethod, setTransferMethod] = useState<'UPI' | 'BANK_TRANSFER'>('BANK_TRANSFER');
   const [amount, setAmount] = useState<number>(availableBalance);
-  
+  const [saveBankDetails, setSaveBankDetails] = useState<boolean>(true);
+  const [serverBalance, setServerBalance] = useState<number | null>(null);
+  const [serverGross, setServerGross] = useState<number | null>(null);
+  const [serverTransferred, setServerTransferred] = useState<number | null>(null);
+  const [serverTicketsSold, setServerTicketsSold] = useState<number | null>(null);
+
   // UPI fields (real user data only — no fake defaults)
   const [upiId, setUpiId] = useState('');
   const [accountHolderName, setAccountHolderName] = useState(currentUser?.name || '');
 
-  // Bank fields (user-entered — no fake bank defaults)
+  // Bank fields (user-entered or saved in host's own payout profile)
   const [accountNumber, setAccountNumber] = useState('');
   const [confirmAccountNumber, setConfirmAccountNumber] = useState('');
   const [ifscCode, setIfscCode] = useState('');
   const [bankName, setBankName] = useState('');
 
   const [isProcessing, setIsProcessing] = useState(false);
-  const [processingStatus, setProcessingStatus] = useState('Connecting to RazorpayX Gateway...');
+  const [processingStatus, setProcessingStatus] = useState('Connecting to Central RazorpayX Gateway...');
   const [completedPayout, setCompletedPayout] = useState<PayoutRecord | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [gatewayConfig, setGatewayConfig] = useState<RazorpayGatewayConfigStatus | null>(null);
   const [isLoadingConfig, setIsLoadingConfig] = useState(false);
 
-  // Synchronize amount, gateway config, and reset states when modal is opened
+  // Synchronize amount, gateway config, organizer revenue & saved bank details when modal opens
   useEffect(() => {
     if (isOpen) {
       setAmount(availableBalance > 0 ? availableBalance : 0);
       setCompletedPayout(null);
       setErrorMessage('');
       setIsProcessing(false);
+      setServerBalance(null);
+      setServerGross(null);
+      setServerTransferred(null);
+      setServerTicketsSold(null);
       if (currentUser?.name) {
-        setAccountHolderName(currentUser.name);
+        setAccountHolderName((prev) => prev || currentUser.name);
       }
       setIsLoadingConfig(true);
-      PaymentService.getRazorpayGatewayConfig()
-        .then((cfg) => setGatewayConfig(cfg))
-        .catch(() => setGatewayConfig(null))
+      Promise.all([
+        PaymentService.getRazorpayGatewayConfig().catch(() => null),
+        currentUser?.uid
+          ? PaymentService.getHostRevenueSummary(currentUser.uid, currentUser.email).catch(() => null)
+          : Promise.resolve(null),
+        currentUser?.uid
+          ? PaymentService.getHostPayoutProfile(currentUser.uid).catch(() => null)
+          : Promise.resolve(null),
+      ])
+        .then(([cfg, rev, profile]) => {
+          setGatewayConfig(cfg);
+          if (rev && rev.success) {
+            setServerBalance(rev.availableBalance);
+            setServerGross(rev.totalRevenue);
+            setServerTransferred(rev.totalTransferred);
+            setServerTicketsSold(rev.totalTicketsSold);
+            if (rev.availableBalance > 0) {
+              setAmount(rev.availableBalance);
+            } else if (rev.totalEvents > 0 || rev.totalTransferred > 0) {
+              setAmount(0);
+            }
+          }
+          if (profile) {
+            if (profile.preferredMethod === 'UPI' || profile.preferredMethod === 'BANK_TRANSFER') {
+              setTransferMethod(profile.preferredMethod);
+            }
+            if (profile.accountHolderName) setAccountHolderName(profile.accountHolderName);
+            if (profile.accountNumber) {
+              setAccountNumber(profile.accountNumber);
+              setConfirmAccountNumber(profile.accountNumber);
+            }
+            if (profile.ifscCode) setIfscCode(profile.ifscCode);
+            if (profile.bankName) setBankName(profile.bankName);
+            if (profile.upiId) setUpiId(profile.upiId);
+          }
+        })
         .finally(() => setIsLoadingConfig(false));
     }
   }, [isOpen, availableBalance, currentUser]);
 
   if (!isOpen) return null;
+
+  const effectiveAvailableBalance = serverBalance !== null ? serverBalance : availableBalance;
+  const effectiveGrossRevenue = serverGross !== null ? serverGross : totalRevenue ?? effectiveAvailableBalance;
+  const effectiveTransferred = serverTransferred !== null ? serverTransferred : totalTransferred ?? 0;
+  const effectiveTicketsSold = serverTicketsSold !== null ? serverTicketsSold : totalTicketsSold;
 
   const handleTransfer = async () => {
     setErrorMessage('');
@@ -82,8 +132,8 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
       setErrorMessage('Please enter a valid transfer amount greater than ₹0.');
       return;
     }
-    if (amount > availableBalance) {
-      setErrorMessage(`Demanded amount exceeds available ticket revenue balance (₹${availableBalance.toLocaleString()}).`);
+    if (amount > effectiveAvailableBalance) {
+      setErrorMessage(`Demanded amount exceeds available sold-ticket balance (₹${effectiveAvailableBalance.toLocaleString()}).`);
       return;
     }
 
@@ -117,12 +167,13 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
 
     setIsProcessing(true);
     setProcessingStatus(
-      `Dispatching ₹${amount.toLocaleString()} via RazorpayX (${transferMethod === 'UPI' ? 'UPI VPA' : 'Bank IMPS'})...`
+      `Dispatching ₹${amount.toLocaleString()} from Central Gateway via RazorpayX (${transferMethod === 'UPI' ? 'UPI VPA' : 'Bank IMPS'})...`
     );
 
     try {
       const result = await PaymentService.processHostPayout({
         hostId: currentUser?.uid || '',
+        hostEmail: currentUser?.email || '',
         hostName: currentUser?.name || 'Event Host',
         amount: Number(amount),
         method: transferMethod,
@@ -130,7 +181,8 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
         accountHolderName: accountHolderName.trim(),
         bankName: transferMethod === 'BANK_TRANSFER' ? bankName.trim() : undefined,
         ifscCode: transferMethod === 'BANK_TRANSFER' ? ifscCode.trim().toUpperCase() : undefined,
-        notes: `Host on-demand revenue settlement via RazorpayX ${transferMethod}`
+        notes: `Organizer sold-ticket settlement via Central Gateway (${transferMethod})`,
+        saveBankDetails,
       });
 
       if (result.success && result.payout) {
@@ -263,70 +315,69 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
           /* TRANSFER FORM */
           <div className="mt-4 flex-1 overflow-y-auto space-y-4 text-xs pr-1">
             {/* Balance Overview Card */}
-            <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 via-teal-50 to-indigo-50 border border-emerald-200 flex items-center justify-between">
-              <div>
-                <span className="text-[11px] text-emerald-800 font-bold uppercase tracking-wider block">
-                  Available Revenue for Settlement
-                </span>
-                <span className="text-2xl font-black text-emerald-900">
-                  ₹{availableBalance.toLocaleString()}
-                </span>
-                <p className="text-[10px] text-emerald-700 mt-0.5">
-                  100% verified ticket collections ready for payout
-                </p>
+            <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 via-teal-50 to-indigo-50 border border-emerald-200 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <span className="text-[11px] text-emerald-800 font-bold uppercase tracking-wider block">
+                    Available Balance to Settle
+                  </span>
+                  <span className="text-2xl font-black text-emerald-900">
+                    ₹{effectiveAvailableBalance.toLocaleString()}
+                  </span>
+                  <p className="text-[10px] text-emerald-700 mt-0.5">
+                    Collected via Central Gateway{typeof effectiveTicketsSold === 'number' ? ` (${effectiveTicketsSold} tickets sold)` : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={effectiveAvailableBalance <= 0}
+                  onClick={() => setAmount(effectiveAvailableBalance)}
+                  className="py-1.5 px-3 rounded-xl bg-white border border-emerald-300 text-emerald-800 font-bold text-xs hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-2xs cursor-pointer shrink-0"
+                >
+                  Settle Full Balance
+                </button>
               </div>
-              <button
-                type="button"
-                disabled={availableBalance <= 0}
-                onClick={() => setAmount(availableBalance)}
-                className="py-1.5 px-3 rounded-xl bg-white border border-emerald-300 text-emerald-800 font-bold text-xs hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-2xs cursor-pointer"
-              >
-                Settle Full Balance
-              </button>
+              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-emerald-200/70 text-[11px]">
+                <div className="bg-white/70 rounded-xl px-2.5 py-1.5">
+                  <span className="text-slate-500 block text-[10px]">Total Sold Collections</span>
+                  <span className="font-black text-slate-800">₹{effectiveGrossRevenue.toLocaleString()}</span>
+                </div>
+                <div className="bg-white/70 rounded-xl px-2.5 py-1.5">
+                  <span className="text-slate-500 block text-[10px]">Already Settled</span>
+                  <span className="font-black text-indigo-700">₹{effectiveTransferred.toLocaleString()}</span>
+                </div>
+              </div>
             </div>
 
-            {/* RazorpayX Payout Account Readiness Notice */}
+            {/* Central Backend Gateway & RazorpayX Payout Status */}
             {!isLoadingConfig && gatewayConfig && (!gatewayConfig.isConfigured || !gatewayConfig.hasValidPayoutAccount) && (
-              <div className="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-950 text-xs space-y-2">
+              <div className="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-950 text-xs space-y-1">
                 <div className="flex items-start gap-2.5">
                   <AlertCircle className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
                   <div>
                     <span className="font-bold block">
                       {!gatewayConfig.isConfigured
-                        ? 'Razorpay Gateway Not Configured'
-                        : 'RazorpayX Payout Account Number Needed'}
+                        ? 'Backend Central Gateway Setup Pending'
+                        : 'Backend RazorpayX Payout Account Required'}
                     </span>
                     <span className="text-[11px] text-indigo-800 block mt-0.5 leading-relaxed">
                       {!gatewayConfig.isConfigured
-                        ? 'Add your Razorpay Key ID & Key Secret in Gateway Settings or Secrets to enable payments and payouts.'
-                        : 'Razorpay Standard auto-settles ticket collections directly to your linked merchant bank account. For instant on-demand API payouts here, configure your numeric RazorpayX Current/Virtual Account Number (not your rzp_ Key ID).'}
+                        ? 'Platform Razorpay credentials (RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET) must be configured by the backend administrator in .env / Secrets.'
+                        : 'Ticket payments are already going into the central backend Razorpay gateway and tracked above. To enable self-serve bank transfers here, the platform administrator must configure a numeric RazorpayX Current/Virtual Account Number (RAZORPAY_ACCOUNT_NUMBER) in backend .env / Secrets.'}
                     </span>
                   </div>
                 </div>
-                {onOpenGatewaySettings && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onClose();
-                      onOpenGatewaySettings();
-                    }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] transition cursor-pointer"
-                  >
-                    <Settings className="w-3.5 h-3.5" />
-                    <span>Open Razorpay Gateway Settings</span>
-                  </button>
-                )}
               </div>
             )}
 
             {/* Zero Balance Notice */}
-            {availableBalance <= 0 && (
+            {effectiveAvailableBalance <= 0 && (
               <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
                 <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                 <div>
                   <span className="font-bold block">No Pending Settlement Balance</span>
                   <span className="text-[11px] text-amber-800">
-                    Your current available balance is ₹0. When students purchase paid event passes, verified ticket collections will become available for settlement here.
+                    Your current available balance is ₹0. When students purchase paid passes for your events, the verified amount is credited to your organizer balance for settlement here.
                   </span>
                 </div>
               </div>
@@ -340,13 +391,13 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
               </div>
             )}
 
-            {/* Transfer Amount Input - "as per his demand" */}
+            {/* Transfer Amount Input */}
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="font-bold text-slate-700">
-                  Settlement Amount (As Per Demand) *
+                  Settlement Amount *
                 </label>
-                <span className="text-[11px] text-slate-400">Min: ₹1 • Max: ₹{availableBalance.toLocaleString()}</span>
+                <span className="text-[11px] text-slate-400">Min: ₹1 • Max: ₹{effectiveAvailableBalance.toLocaleString()}</span>
               </div>
               <div className="relative">
                 <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">
@@ -355,7 +406,7 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
                 <input
                   type="number"
                   min={1}
-                  max={availableBalance}
+                  max={effectiveAvailableBalance}
                   value={amount || ''}
                   onChange={(e) => setAmount(Number(e.target.value))}
                   placeholder="e.g. 5000"
@@ -371,7 +422,7 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
                   { label: '75%', frac: 0.75 },
                   { label: '100% (All)', frac: 1.0 }
                 ].map(({ label, frac }) => {
-                  const fractionAmount = Math.round(availableBalance * frac);
+                  const fractionAmount = Math.round(effectiveAvailableBalance * frac);
                   return (
                     <button
                       key={label}
@@ -393,25 +444,9 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
             {/* Payout Destination Method Selector */}
             <div>
               <label className="font-bold text-slate-700 block mb-1.5">
-                Select Settlement Destination:
+                Select Your Settlement Account:
               </label>
               <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTransferMethod('UPI')}
-                  className={`p-3 rounded-2xl border flex items-center gap-2.5 text-left transition cursor-pointer ${
-                    transferMethod === 'UPI'
-                      ? 'border-indigo-600 bg-indigo-50/70 ring-1 ring-indigo-600 text-indigo-900 shadow-xs'
-                      : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
-                  }`}
-                >
-                  <Smartphone className="w-5 h-5 text-indigo-600 shrink-0" />
-                  <div>
-                    <p className="font-bold text-xs">Direct UPI VPA</p>
-                    <p className="text-[10px] text-slate-500">Instant credit to GPay / PhonePe / Paytm</p>
-                  </div>
-                </button>
-
                 <button
                   type="button"
                   onClick={() => setTransferMethod('BANK_TRANSFER')}
@@ -424,7 +459,23 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
                   <Building2 className="w-5 h-5 text-indigo-600 shrink-0" />
                   <div>
                     <p className="font-bold text-xs">Bank Account</p>
-                    <p className="text-[10px] text-slate-500">IMPS / NEFT direct clearing</p>
+                    <p className="text-[10px] text-slate-500">IMPS / NEFT direct credit</p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTransferMethod('UPI')}
+                  className={`p-3 rounded-2xl border flex items-center gap-2.5 text-left transition cursor-pointer ${
+                    transferMethod === 'UPI'
+                      ? 'border-indigo-600 bg-indigo-50/70 ring-1 ring-indigo-600 text-indigo-900 shadow-xs'
+                      : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <Smartphone className="w-5 h-5 text-indigo-600 shrink-0" />
+                  <div>
+                    <p className="font-bold text-xs">Direct UPI VPA</p>
+                    <p className="text-[10px] text-slate-500">Instant GPay / PhonePe / Paytm</p>
                   </div>
                 </button>
               </div>
@@ -543,11 +594,22 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
               </div>
             )}
 
+            {/* Save Bank Details Toggle */}
+            <label className="flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer select-none px-1">
+              <input
+                type="checkbox"
+                checked={saveBankDetails}
+                onChange={(e) => setSaveBankDetails(e.target.checked)}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>Save my Bank / UPI details securely to this organizer login for faster future settlements</span>
+            </label>
+
             {/* Gateway Security Badge */}
             <div className="p-3 rounded-2xl bg-indigo-50/70 border border-indigo-100 flex items-center justify-between text-[11px] text-indigo-700">
               <div className="flex items-center gap-2">
                 <ShieldCheck className="w-4 h-4 shrink-0 text-emerald-600" />
-                <span>Zero deduction payout • Instant 24x7 IMPS / UPI Dispatch</span>
+                <span>Settled from Central Backend Gateway • 24x7 IMPS / UPI</span>
               </div>
               <span className="font-mono text-[10px] text-slate-400 font-semibold">24x7 IMPS</span>
             </div>
@@ -559,7 +621,7 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
                 disabled={
                   isProcessing ||
                   isLoadingConfig ||
-                  availableBalance <= 0 ||
+                  effectiveAvailableBalance <= 0 ||
                   amount <= 0 ||
                   Boolean(gatewayConfig && (!gatewayConfig.isConfigured || !gatewayConfig.hasValidPayoutAccount))
                 }

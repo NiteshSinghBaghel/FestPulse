@@ -125,6 +125,7 @@ export interface ScannerScanResult {
 export interface PayoutRecord {
   payoutId: string;
   hostId: string;
+  hostEmail?: string;
   hostName: string;
   amount: number;
   currency: string;
@@ -136,7 +137,18 @@ export interface PayoutRecord {
   status: 'completed' | 'processing' | 'pending' | 'failed';
   referenceId: string; // Bank UTR or IMPS reference
   gatewayRef?: string; // Razorpay Payout ID (pout_...)
-  gateway?: 'RAZORPAY_PAYOUT' | 'IMPS_DIRECT' | 'UPI_INSTANT' | 'INSTANT_PAYOUT';
+  gateway?: 'RAZORPAY_PAYOUT' | 'RAZORPAYX_PAYOUT' | 'IMPS_DIRECT' | 'UPI_INSTANT' | 'INSTANT_PAYOUT';
   timestamp: string;
   notes?: string;
+}
+
+export interface HostPayoutProfile {
+  hostId: string;
+  preferredMethod: 'BANK_TRANSFER' | 'UPI';
+  accountHolderName: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  bankName?: string;
+  upiId?: string;
+  updatedAt: string;
 }

@@ -418,7 +418,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
                 <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                   <span>
-                    Razorpay merchant credentials are not configured on the server yet. Ask the organizer to add live or test keys in Gateway Settings or Secrets.
+                    Platform Razorpay payment gateway is not configured on the backend server yet. The administrator must add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in Secrets / .env.
                   </span>
                 </div>
               )}
@@ -742,7 +742,6 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
               <button
                 type="button"
                 onClick={() => {
-                  onSuccess(generatedTicket);
                   onClose();
                 }}
                 className="w-full py-3.5 px-4 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-md flex items-center justify-center gap-2 transition active:scale-[0.98] cursor-pointer"

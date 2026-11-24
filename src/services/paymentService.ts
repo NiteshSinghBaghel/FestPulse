@@ -14,6 +14,7 @@ export const RAZORPAY_CONFIG = {
 
 export interface HostPayoutRequest {
   hostId: string;
+  hostEmail?: string;
   hostName: string;
   amount: number;
   method: 'UPI' | 'BANK_TRANSFER';
@@ -22,6 +23,7 @@ export interface HostPayoutRequest {
   bankName?: string;
   ifscCode?: string;
   notes?: string;
+  saveBankDetails?: boolean;
 }
 
 export interface HostPayoutResponse {
@@ -74,7 +76,44 @@ export interface RazorpayGatewayConfigStatus {
   accountNumber?: string;
   webhookConfigured: boolean;
   source?: string;
+  centralized?: boolean;
   merchantName: string;
+}
+
+export interface HostPayoutProfileData {
+  hostId: string;
+  preferredMethod: 'BANK_TRANSFER' | 'UPI';
+  accountHolderName: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  bankName?: string;
+  upiId?: string;
+  updatedAt?: string;
+}
+
+export interface ServerHostRevenueSummary {
+  success: boolean;
+  totalEvents: number;
+  totalTicketsSold: number;
+  ticketsRevenue: number;
+  eventsRevenue: number;
+  paymentsRevenue: number;
+  totalRevenue: number;
+  totalCheckedIn: number;
+  totalTransferred: number;
+  availableBalance: number;
+  gatewayConfigured: boolean;
+  hasValidPayoutAccount: boolean;
+  isLive: boolean;
+  eventBreakdown: Array<{
+    eventId: string;
+    title: string;
+    price: number;
+    ticketsSold: number;
+    revenue: number;
+    status: string;
+  }>;
+  payouts: PayoutRecord[];
 }
 
 export class PaymentService {
@@ -134,7 +173,7 @@ export class PaymentService {
   }): Promise<void> {
     const activeKeyId = (params.keyId || RAZORPAY_CONFIG.keyId || '').trim();
     if (!activeKeyId || (!activeKeyId.startsWith('rzp_live_') && !activeKeyId.startsWith('rzp_test_'))) {
-      throw new Error('Razorpay Key ID is not configured. Please add your Razorpay credentials in Gateway Settings or Secrets.');
+      throw new Error('Platform Razorpay gateway is not configured on the backend server yet. Please contact the platform administrator.');
     }
 
     if (!params.orderId || !params.orderId.startsWith('order_') || params.orderId.length <= 12) {
@@ -337,7 +376,11 @@ export class PaymentService {
             razorpay_payment_id: req.paymentId,
             razorpay_signature: req.razorpaySignature,
             amount: totalAmount,
+            quantity: qty,
             eventId: event.eventId,
+            eventTitle: event.title,
+            hostId: event.hostId,
+            hostEmail: event.hostEmail || '',
             userId: req.userId,
             userName: req.userName,
             userEmail: req.userEmail,
@@ -465,8 +508,10 @@ export class PaymentService {
         bankName: req.bankName?.trim(),
         ifscCode: req.ifscCode?.trim().toUpperCase(),
         hostId: req.hostId,
+        hostEmail: req.hostEmail?.trim(),
         hostName: req.hostName,
         notes: req.notes,
+        saveBankDetails: req.saveBankDetails,
       }),
     });
 
@@ -475,7 +520,7 @@ export class PaymentService {
       throw new Error(
         data?.error ||
           data?.message ||
-          'RazorpayX payout request failed. Please verify your RazorpayX Account Number in Gateway Settings.'
+          'RazorpayX payout dispatch failed. Ensure backend RAZORPAY_ACCOUNT_NUMBER is configured by the platform administrator.'
       );
     }
 
@@ -543,6 +588,57 @@ export class PaymentService {
       return { success: false, error: data.error || 'Failed to update credentials' };
     } catch (e: any) {
       return { success: false, error: e.message || 'Network error updating credentials' };
+    }
+  }
+
+  /**
+   * Fetch authoritative server revenue breakdown and settleable balance for the logged-in organizer.
+   */
+  static async getHostRevenueSummary(hostId: string, hostEmail?: string): Promise<ServerHostRevenueSummary | null> {
+    if (!hostId && !hostEmail) return null;
+    try {
+      const params = new URLSearchParams();
+      if (hostId) params.set('hostId', hostId.trim());
+      if (hostEmail) params.set('hostEmail', hostEmail.toLowerCase().trim());
+      const res = await fetch(`/api/host/revenue?${params.toString()}`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Load the logged-in organizer's saved Bank / UPI payout destination.
+   */
+  static async getHostPayoutProfile(hostId: string): Promise<HostPayoutProfileData | null> {
+    if (!hostId) return null;
+    try {
+      const res = await fetch(`/api/host/payout-profile?hostId=${encodeURIComponent(hostId.trim())}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data?.profile || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Save the logged-in organizer's Bank / UPI payout destination strictly under their own account.
+   */
+  static async saveHostPayoutProfile(profile: HostPayoutProfileData): Promise<HostPayoutProfileData | null> {
+    if (!profile.hostId) return null;
+    try {
+      const res = await fetch('/api/host/payout-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profile),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data?.profile || null;
+    } catch {
+      return null;
     }
   }
 

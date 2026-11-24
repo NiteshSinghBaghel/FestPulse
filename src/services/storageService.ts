@@ -758,7 +758,7 @@ export class StorageService {
     const cleanEmail = organizerEmail ? organizerEmail.toLowerCase().trim() : '';
     const hostEvents = this.getHostEvents(cleanId, cleanEmail);
     const hostTickets = this.getHostTickets(cleanId, cleanEmail);
-    const hostPayouts = this.getPayouts(cleanId);
+    const hostPayouts = this.getPayouts(cleanId, cleanEmail);
 
     const totalEvents = hostEvents.length;
     const totalTicketsSold = hostEvents.reduce((acc, e) => acc + (e.ticketsSold || 0), 0);
@@ -775,7 +775,9 @@ export class StorageService {
     const totalRevenue = Math.max(ticketsRevenue, eventsRevenue);
     const totalCheckedIn = hostTickets.filter(t => t.entryStatus === 'entered').length;
 
-    const totalTransferred = hostPayouts.reduce((acc, p) => acc + p.amount, 0);
+    const totalTransferred = hostPayouts
+      .filter(p => p.status !== 'failed')
+      .reduce((acc, p) => acc + (p.amount || 0), 0);
     const availableBalance = Math.max(0, totalRevenue - totalTransferred);
 
     return {
@@ -1673,7 +1675,7 @@ export class StorageService {
   }
 
   // ================= PAYOUTS / REVENUE TRANSFERS =================
-  static getPayouts(hostId?: string): PayoutRecord[] {
+  static getPayouts(hostId?: string, hostEmail?: string): PayoutRecord[] {
     const raw = localStorage.getItem(STORAGE_KEYS.PAYOUTS);
     if (!raw) return [];
     try {
@@ -1683,10 +1685,14 @@ export class StorageService {
       if (cleaned.length !== parsed.length) {
         localStorage.setItem(STORAGE_KEYS.PAYOUTS, JSON.stringify(cleaned));
       }
-      if (hostId) {
-        // Strictly return payouts belonging to this organizer ID only
-        const cleanHostId = hostId.trim();
-        return cleaned.filter(p => p.hostId === cleanHostId);
+      if (hostId || hostEmail) {
+        // Strictly return payouts belonging to this organizer ID or email only
+        const cleanHostId = (hostId || '').trim();
+        const cleanHostEmail = (hostEmail || '').toLowerCase().trim();
+        return cleaned.filter(p =>
+          (cleanHostId && p.hostId === cleanHostId) ||
+          (cleanHostEmail && p.hostEmail && p.hostEmail.toLowerCase().trim() === cleanHostEmail)
+        );
       }
       return cleaned;
     } catch {

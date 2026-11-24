@@ -22,22 +22,6 @@ function getEnvKey(key: string, defaultVal: string): string {
   return fromProc || defaultVal;
 }
 
-function updateEnvKey(key: string, value: string): void {
-  try {
-    const envPath = path.resolve(process.cwd(), '.env');
-    let content = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
-    const regex = new RegExp(`^${key}=.*$`, 'm');
-    if (regex.test(content)) {
-      content = content.replace(regex, `${key}=${value}`);
-    } else {
-      content = content.trim() + (content ? '\n' : '') + `${key}=${value}\n`;
-    }
-    fs.writeFileSync(envPath, content, 'utf8');
-  } catch (e) {
-    console.warn('[Env] Could not write to .env:', e);
-  }
-}
-
 const LEGACY_DEMO_KEY_IDS = new Set([
   'rzp_test_5Wj8tV4x6zK9aL',
   'rzp_test_Tn2gGCmZM8sHv0',
@@ -78,6 +62,7 @@ interface DatabaseSchema {
     enabled: boolean;
   };
   passwordResetTokens?: Record<string, { email: string; role: string; createdAt: string; expiresAt: number }>;
+  hostPayoutProfiles?: Record<string, any>;
 }
 
 function readEnvRazorpayConfig(): RazorpayConfigSchema {
@@ -112,6 +97,7 @@ function loadDatabase(): DatabaseSchema {
         flushedAt: Date.now(),
         supabaseConfig: { url: '', anonKey: '', enabled: false },
         passwordResetTokens: {},
+        hostPayoutProfiles: {},
       };
       fs.writeFileSync(DB_FILE_PATH, JSON.stringify(initial, null, 2), 'utf8');
       return initial;
@@ -119,7 +105,9 @@ function loadDatabase(): DatabaseSchema {
     const raw = fs.readFileSync(DB_FILE_PATH, 'utf8');
     const parsed = JSON.parse(raw);
     const storedRzp = parsed.razorpayConfig;
+    const hasEnvCredentials = Boolean(defaultRzpConfig.keyId && defaultRzpConfig.keySecret);
     const useStored = Boolean(
+      !hasEnvCredentials &&
       storedRzp &&
       storedRzp.updatedViaUi &&
       storedRzp.keyId &&
@@ -136,6 +124,7 @@ function loadDatabase(): DatabaseSchema {
       flushedAt: typeof parsed.flushedAt === 'number' ? parsed.flushedAt : 0,
       supabaseConfig: parsed.supabaseConfig || { url: '', anonKey: '', enabled: false },
       passwordResetTokens: parsed.passwordResetTokens || {},
+      hostPayoutProfiles: parsed.hostPayoutProfiles && typeof parsed.hostPayoutProfiles === 'object' ? parsed.hostPayoutProfiles : {},
     };
   } catch (error) {
     console.error('[API Server] Error loading database:', error);
@@ -148,6 +137,7 @@ function loadDatabase(): DatabaseSchema {
       razorpayConfig: defaultRzpConfig,
       flushedAt: 0,
       supabaseConfig: { url: '', anonKey: '', enabled: false },
+      hostPayoutProfiles: {},
     };
   }
 }
@@ -198,8 +188,124 @@ function sendJson(res: any, statusCode: number, data: any) {
 
 function sanitizeAccount(account: any) {
   if (!account || typeof account !== 'object') return account;
-  const { password, passwordHash, salt, oldEmail, ...safe } = account;
+  const { password, passwordHash, salt, oldEmail, payoutDetails, bankAccount, ifscCode, ...safe } = account;
   return safe;
+}
+
+function computeServerHostRevenue(db: DatabaseSchema, hostId?: string, hostEmail?: string) {
+  const cleanId = (hostId || '').trim();
+  const cleanEmail = (hostEmail || '').toLowerCase().trim();
+  if (!cleanId && !cleanEmail) {
+    return {
+      totalEvents: 0,
+      totalTicketsSold: 0,
+      ticketsRevenue: 0,
+      eventsRevenue: 0,
+      paymentsRevenue: 0,
+      totalRevenue: 0,
+      totalCheckedIn: 0,
+      totalTransferred: 0,
+      availableBalance: 0,
+      eventBreakdown: [] as any[],
+      payouts: [] as any[],
+    };
+  }
+
+  const matchesOrganizer = (record: any) =>
+    Boolean(
+      (cleanId && record?.hostId && String(record.hostId).trim() === cleanId) ||
+      (cleanEmail && record?.hostEmail && String(record.hostEmail).toLowerCase().trim() === cleanEmail)
+    );
+
+  const hostEvents = (Array.isArray(db.events) ? db.events : []).filter(matchesOrganizer);
+  const hostEventIds = new Set(hostEvents.map((e: any) => e.eventId));
+
+  const hostTickets = (Array.isArray(db.tickets) ? db.tickets : []).filter(
+    (t: any) => (t?.eventId && hostEventIds.has(t.eventId)) || matchesOrganizer(t)
+  );
+  const confirmedHostTickets = hostTickets.filter((t: any) => t?.status === 'confirmed');
+
+  const hostCapturedPayments = (Array.isArray(db.payments) ? db.payments : []).filter(
+    (p: any) => p?.status === 'captured' && ((p?.eventId && hostEventIds.has(p.eventId)) || matchesOrganizer(p))
+  );
+
+  let ticketsRevenue = 0;
+  let eventsRevenue = 0;
+  let paymentsRevenue = 0;
+  let totalTicketsSold = 0;
+  let grossTotalRevenue = 0;
+
+  const eventBreakdown = hostEvents.map((evt: any) => {
+    const evtTickets = confirmedHostTickets.filter((t: any) => t.eventId === evt.eventId);
+    const evtPayments = hostCapturedPayments.filter((p: any) => p.eventId === evt.eventId);
+
+    const evtTicketsRev = evtTickets.reduce((acc: number, t: any) => acc + (Number(t.amount) || 0), 0);
+    const evtModelSold = Number(evt.ticketsSold) || 0;
+    const evtTicketQtySum = evtTickets.reduce((acc: number, t: any) => acc + (Math.max(1, Number(t.quantity) || 1)), 0);
+    const evtSoldCount = Math.max(evtModelSold, evtTicketQtySum);
+    const evtModelRev = evtModelSold * (Number(evt.price) || 0);
+    const evtPayRev = evtPayments.reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
+    const evtRevenue = Math.max(evtTicketsRev, evtModelRev, evtPayRev);
+
+    ticketsRevenue += evtTicketsRev;
+    eventsRevenue += evtModelRev;
+    paymentsRevenue += evtPayRev;
+    totalTicketsSold += evtSoldCount;
+    grossTotalRevenue += evtRevenue;
+
+    return {
+      eventId: evt.eventId,
+      title: evt.title || 'Event',
+      price: Number(evt.price) || 0,
+      ticketsSold: evtSoldCount,
+      revenue: evtRevenue,
+      status: evt.status || 'published',
+    };
+  });
+
+  // Include any orphan confirmed tickets / captured payments directly owned by this host (not in hostEventIds)
+  const orphanTickets = confirmedHostTickets.filter((t: any) => !t?.eventId || !hostEventIds.has(t.eventId));
+  const orphanPayments = hostCapturedPayments.filter((p: any) => !p?.eventId || !hostEventIds.has(p.eventId));
+  const orphanTicketsRev = orphanTickets.reduce((acc: number, t: any) => acc + (Number(t.amount) || 0), 0);
+  const orphanPaymentsRev = orphanPayments.reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
+  ticketsRevenue += orphanTicketsRev;
+  paymentsRevenue += orphanPaymentsRev;
+  totalTicketsSold += orphanTickets.reduce((acc: number, t: any) => acc + Math.max(1, Number(t.quantity) || 1), 0);
+  grossTotalRevenue += Math.max(orphanTicketsRev, orphanPaymentsRev);
+
+  const payoutMap = new Map<string, any>();
+  for (const p of Array.isArray(db.payouts) ? db.payouts : []) {
+    if (matchesOrganizer(p) && p?.payoutId) {
+      payoutMap.set(p.payoutId, p);
+    }
+  }
+  const hostPayouts = Array.from(payoutMap.values()).sort(
+    (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+  );
+
+  const totalTransferred = hostPayouts
+    .filter((p: any) => {
+      const st = String(p?.status || '').toLowerCase();
+      return st !== 'failed' && st !== 'cancelled' && st !== 'reversed';
+    })
+    .reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
+
+  const availableBalance = Math.max(0, grossTotalRevenue - totalTransferred);
+  const totalCheckedIn = hostTickets.filter((t: any) => t?.entryStatus === 'entered').length;
+
+  return {
+    totalEvents: hostEvents.length,
+    totalTicketsSold,
+    ticketsRevenue,
+    eventsRevenue,
+    paymentsRevenue,
+    totalRevenue: grossTotalRevenue,
+    totalCheckedIn,
+    totalTransferred,
+    availableBalance,
+    eventBreakdown,
+    payouts: hostPayouts,
+  };
 }
 
 function stripGatePinUnlessOwner(event: any, userId: string, userEmail: string) {
@@ -429,8 +535,12 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           }
 
           const scopedPayouts =
-            role === 'host' && userId
-              ? db.payouts.filter((p) => p.hostId === userId)
+            role === 'host' && (userId || userEmail)
+              ? db.payouts.filter(
+                  (p) =>
+                    (userId && p.hostId === userId) ||
+                    (userEmail && p.hostEmail && String(p.hostEmail).toLowerCase().trim() === userEmail)
+                )
               : [];
 
           const scopedAccounts = hasIdentity
@@ -462,6 +572,8 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           db.tickets = [];
           db.accounts = [];
           db.payouts = [];
+          db.payments = [];
+          db.hostPayoutProfiles = {};
           db.flushedAt = Date.now();
           saveDatabase(db);
           if (PostgresService.getConnected()) {
@@ -1215,17 +1327,31 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           if (req.method === 'GET') {
             const parsed = new URL(url, 'http://localhost');
             const hostId = (parsed.searchParams.get('hostId') || '').trim();
-            if (!hostId) {
+            const hostEmail = (parsed.searchParams.get('hostEmail') || '').toLowerCase().trim();
+            if (!hostId && !hostEmail) {
               return sendJson(res, 200, []);
             }
-            return sendJson(res, 200, db.payouts.filter((p) => p.hostId === hostId));
+            return sendJson(
+              res,
+              200,
+              db.payouts.filter(
+                (p) =>
+                  (hostId && p.hostId === hostId) ||
+                  (hostEmail && p.hostEmail && String(p.hostEmail).toLowerCase().trim() === hostEmail)
+              )
+            );
           }
           if (req.method === 'POST') {
             const payout = await parseBody(req);
             if (!payout || !payout.payoutId) {
               return sendJson(res, 400, { error: 'Invalid payout data' });
             }
-            db.payouts.unshift(payout);
+            const existIdx = db.payouts.findIndex((p) => p.payoutId === payout.payoutId);
+            if (existIdx > -1) {
+              db.payouts[existIdx] = { ...db.payouts[existIdx], ...payout };
+            } else {
+              db.payouts.unshift(payout);
+            }
             saveDatabase(db);
             if (PostgresService.getConnected()) {
               PostgresService.insertPayout(payout).catch((e: any) => console.warn('Postgres payout sync error:', e));
@@ -1252,21 +1378,27 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
           }
         }
 
-        // 8. Razorpay Production Gateway Integration Endpoints
+        // 8. Centralized Backend Razorpay Gateway Integration Helpers
         const getActiveRzp = () => {
           const envCfg = readEnvRazorpayConfig();
+          const hasEnvCreds = Boolean(
+            envCfg.keyId &&
+            envCfg.keySecret &&
+            (envCfg.keyId.startsWith('rzp_live_') || envCfg.keyId.startsWith('rzp_test_'))
+          );
           const stored = db.razorpayConfig;
           const useStored = Boolean(
+            !hasEnvCreds &&
             stored &&
             stored.updatedViaUi &&
             stored.keyId &&
             !isLegacyDemoKeyId(stored.keyId) &&
             !isLegacyDemoSecret(stored.keySecret)
           );
-          const keyId = ((useStored ? stored.keyId : envCfg.keyId) || envCfg.keyId || '').trim();
-          const keySecret = ((useStored ? stored.keySecret : envCfg.keySecret) || envCfg.keySecret || '').trim();
-          const accountNumber = ((useStored ? stored.accountNumber : envCfg.accountNumber) || envCfg.accountNumber || '').trim();
-          const webhookSecret = ((useStored ? stored.webhookSecret : envCfg.webhookSecret) || envCfg.webhookSecret || '').trim();
+          const keyId = ((hasEnvCreds ? envCfg.keyId : useStored ? stored.keyId : envCfg.keyId) || '').trim();
+          const keySecret = ((hasEnvCreds ? envCfg.keySecret : useStored ? stored.keySecret : envCfg.keySecret) || '').trim();
+          const accountNumber = ((hasEnvCreds ? envCfg.accountNumber : useStored ? stored.accountNumber : envCfg.accountNumber) || envCfg.accountNumber || '').trim();
+          const webhookSecret = ((hasEnvCreds ? envCfg.webhookSecret : useStored ? stored.webhookSecret : envCfg.webhookSecret) || envCfg.webhookSecret || '').trim();
           const isLive = keyId.startsWith('rzp_live_');
           const isConfigured = Boolean(
             keyId &&
@@ -1283,10 +1415,66 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             webhookSecret,
             isLive,
             isConfigured,
+            hasEnvCreds,
             hasValidPayoutAccount,
-            source: useStored ? 'settings' : 'env',
+            source: hasEnvCreds ? 'env' : useStored ? 'settings' : 'env',
           };
         };
+
+        // 8a. Authoritative Host Revenue & Saved Bank Profile Endpoints (strictly organizer-scoped)
+        if ((url === '/api/host/revenue' || url.startsWith('/api/host/revenue?')) && req.method === 'GET') {
+          const parsed = new URL(url, 'http://localhost');
+          const hostId = (parsed.searchParams.get('hostId') || '').trim();
+          const hostEmail = (parsed.searchParams.get('hostEmail') || '').toLowerCase().trim();
+          if (!hostId && !hostEmail) {
+            return sendJson(res, 401, { success: false, error: 'Authenticated organizer ID or email is required.' });
+          }
+          const rzp = getActiveRzp();
+          const rev = computeServerHostRevenue(db, hostId, hostEmail);
+          return sendJson(res, 200, {
+            success: true,
+            ...rev,
+            gatewayConfigured: rzp.isConfigured,
+            hasValidPayoutAccount: rzp.hasValidPayoutAccount,
+            isLive: rzp.isLive,
+          });
+        }
+
+        if (url === '/api/host/payout-profile' || url.startsWith('/api/host/payout-profile?')) {
+          if (req.method === 'GET') {
+            const parsed = new URL(url, 'http://localhost');
+            const hostId = (parsed.searchParams.get('hostId') || '').trim();
+            if (!hostId) {
+              return sendJson(res, 401, { success: false, error: 'Authenticated organizer ID is required.' });
+            }
+            const profile = db.hostPayoutProfiles?.[hostId] || null;
+            return sendJson(res, 200, { success: true, profile });
+          }
+          if (req.method === 'POST') {
+            const body = await parseBody(req);
+            const hostId = String(body.hostId || '').trim();
+            if (!hostId) {
+              return sendJson(res, 401, { success: false, error: 'Authenticated organizer ID is required.' });
+            }
+            const preferredMethod: 'BANK_TRANSFER' | 'UPI' = body.preferredMethod === 'UPI' ? 'UPI' : 'BANK_TRANSFER';
+            const profile = {
+              hostId,
+              preferredMethod,
+              accountHolderName: String(body.accountHolderName || '').trim(),
+              accountNumber: String(body.accountNumber || '').trim(),
+              ifscCode: String(body.ifscCode || '').trim().toUpperCase(),
+              bankName: String(body.bankName || '').trim(),
+              upiId: String(body.upiId || '').trim(),
+              updatedAt: new Date().toISOString(),
+            };
+            if (!db.hostPayoutProfiles || typeof db.hostPayoutProfiles !== 'object') {
+              db.hostPayoutProfiles = {};
+            }
+            db.hostPayoutProfiles[hostId] = profile;
+            saveDatabase(db);
+            return sendJson(res, 200, { success: true, profile });
+          }
+        }
 
         if (url === '/api/razorpay/config') {
           if (req.method === 'GET') {
@@ -1302,6 +1490,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
                 : '',
               webhookConfigured: Boolean(rzp.webhookSecret),
               source: rzp.source,
+              centralized: true,
               merchantName: 'Fest-Plus College Events',
             });
           }
@@ -1310,6 +1499,13 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             try {
               const body = await parseBody(req);
               const rzp = getActiveRzp();
+              if (rzp.hasEnvCreds) {
+                return sendJson(res, 403, {
+                  success: false,
+                  error:
+                    'Payment gateway is centrally configured on the backend server (.env / Secrets). Individual organizers cannot override platform credentials.',
+                });
+              }
               const newKeyId = (body.keyId || '').trim();
               const newKeySecret = (body.keySecret || '').trim();
               const newAccountNumber = (body.accountNumber || '').trim();
@@ -1441,6 +1637,8 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             const notes = body.notes || {
               eventId,
               eventTitle: String(matchedEvent?.title || body.eventTitle || '').substring(0, 40),
+              hostId: String(matchedEvent?.hostId || '').substring(0, 40),
+              hostEmail: String(matchedEvent?.hostEmail || '').substring(0, 40),
               studentName: String(body.studentName || '').substring(0, 40),
               studentEmail: String(body.studentEmail || '').substring(0, 40),
               quantity: String(qty),
@@ -1605,7 +1803,10 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               });
             }
 
-            // Verified & captured! Record payment in database
+            // Verified & captured! Record payment tagged with owning organizer in central gateway ledger
+            const matchedEvent = body.eventId ? db.events.find((e: any) => e.eventId === body.eventId) : null;
+            const resolvedHostId = String(matchedEvent?.hostId || body.hostId || '').trim();
+            const resolvedHostEmail = String(matchedEvent?.hostEmail || body.hostEmail || '').toLowerCase().trim();
             const paymentRecord = {
               paymentId,
               orderId,
@@ -1615,6 +1816,10 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               method: rzpPayment.method || 'razorpay_standard',
               vpa: rzpPayment.vpa || undefined,
               eventId: body.eventId || '',
+              eventTitle: String(matchedEvent?.title || body.eventTitle || ''),
+              hostId: resolvedHostId,
+              hostEmail: resolvedHostEmail,
+              quantity: Math.max(1, Math.floor(Number(body.quantity) || 1)),
               userId: body.userId || '',
               studentName: body.userName || body.studentName || '',
               studentEmail: body.userEmail || body.studentEmail || '',
@@ -1627,7 +1832,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             }
             db.payments.push(paymentRecord);
             saveDatabase(db);
-            broadcastRealtime('payments', { paymentId, eventId: paymentRecord.eventId });
+            broadcastRealtime('payments', { paymentId, eventId: paymentRecord.eventId, hostId: resolvedHostId });
 
             return sendJson(res, 200, {
               success: true,
@@ -1659,7 +1864,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             if (!rzp.isConfigured) {
               return sendJson(res, 503, {
                 success: false,
-                error: 'Razorpay API credentials are not configured on the server.',
+                error: 'Central Razorpay gateway credentials are not configured on the backend server.',
               });
             }
 
@@ -1668,7 +1873,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
                 success: false,
                 code: 'RAZORPAYX_ACCOUNT_REQUIRED',
                 error:
-                  'A valid RazorpayX Current/Virtual Account Number (RAZORPAY_ACCOUNT_NUMBER) is required for automated API payouts. Ticket collections made on Razorpay Standard automatically settle to your linked bank account on your Razorpay settlement schedule.',
+                  'Backend RAZORPAY_ACCOUNT_NUMBER (numeric RazorpayX Current/Virtual Account Number) is not configured yet. Ask the platform administrator to add it in backend .env / Secrets to enable organizer bank settlements.',
               });
             }
 
@@ -1678,28 +1883,23 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             }
 
             const hostId = String(body.hostId || '').trim();
+            const hostEmail = String(body.hostEmail || '').toLowerCase().trim();
             if (!hostId) {
               return sendJson(res, 401, { success: false, error: 'Authenticated organizer ID is required for payouts.' });
             }
 
-            // Server-side balance check when organizer records exist in db
-            const hostEvents = db.events.filter((e: any) => e.hostId === hostId);
-            const hostEventIds = new Set(hostEvents.map((e: any) => e.eventId));
-            const hostTickets = db.tickets.filter((t: any) => t.hostId === hostId || hostEventIds.has(t.eventId));
-            const ticketsRev = hostTickets
-              .filter((t: any) => t.status === 'confirmed')
-              .reduce((acc: number, t: any) => acc + (Number(t.amount) || 0), 0);
-            const eventsRev = hostEvents.reduce((acc: number, e: any) => acc + ((Number(e.ticketsSold) || 0) * (Number(e.price) || 0)), 0);
-            const grossRev = Math.max(ticketsRev, eventsRev);
-            const settledAlready = db.payouts
-              .filter((p: any) => p.hostId === hostId)
-              .reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
-            const serverAvailable = Math.max(0, grossRev - settledAlready);
-
-            if (grossRev > 0 && amountInRupees > serverAvailable) {
+            // Strictly enforce per-organizer sold-ticket available balance (never allow withdrawing more than sold tickets earned)
+            const hostRev = computeServerHostRevenue(db, hostId, hostEmail);
+            if (hostRev.totalRevenue <= 0 || hostRev.availableBalance <= 0) {
               return sendJson(res, 400, {
                 success: false,
-                error: `Requested settlement (₹${amountInRupees.toLocaleString()}) exceeds verified available balance (₹${serverAvailable.toLocaleString()}).`,
+                error: 'No settleable sold-ticket balance available for this organizer account (Available: ₹0).',
+              });
+            }
+            if (amountInRupees > hostRev.availableBalance) {
+              return sendJson(res, 400, {
+                success: false,
+                error: `Requested settlement (₹${amountInRupees.toLocaleString()}) exceeds your verified sold-ticket available balance (₹${hostRev.availableBalance.toLocaleString()}).`,
               });
             }
 
@@ -1778,6 +1978,7 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             const payoutRecord: any = {
               payoutId: rzpPayoutData.id,
               hostId,
+              hostEmail: hostEmail || undefined,
               hostName,
               amount: amountInRupees,
               currency: 'INR',
@@ -1804,7 +2005,29 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
             } else {
               db.payouts.unshift(payoutRecord);
             }
+
+            if (body.saveBankDetails) {
+              if (!db.hostPayoutProfiles || typeof db.hostPayoutProfiles !== 'object') {
+                db.hostPayoutProfiles = {};
+              }
+              const prevProfile = db.hostPayoutProfiles[hostId] || {};
+              db.hostPayoutProfiles[hostId] = {
+                ...prevProfile,
+                hostId,
+                preferredMethod: method,
+                accountHolderName,
+                accountNumber: method === 'BANK_TRANSFER' ? destination : prevProfile.accountNumber || '',
+                ifscCode: method === 'BANK_TRANSFER' ? ifscCode : prevProfile.ifscCode || '',
+                bankName: method === 'BANK_TRANSFER' ? bankName : prevProfile.bankName || '',
+                upiId: method === 'UPI' ? destination : prevProfile.upiId || '',
+                updatedAt: new Date().toISOString(),
+              };
+            }
+
             saveDatabase(db);
+            if (PostgresService.getConnected()) {
+              PostgresService.insertPayout(payoutRecord).catch((e: any) => console.warn('Postgres payout insert error:', e));
+            }
             broadcastRealtime('payouts', { payoutId: payoutRecord.payoutId, hostId: payoutRecord.hostId });
 
             return sendJson(res, 200, {
