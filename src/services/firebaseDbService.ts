@@ -191,7 +191,10 @@ export class FirebaseDbService {
         availableTickets: Math.round(Number(event.availableTickets) || 0),
         status: event.status === 'draft' ? 'published' : event.status,
         category: event.category,
-        gatePin: event.gatePin || '100000',
+        gatePin:
+          event.gatePin && /^\d{6}$/.test(String(event.gatePin).trim())
+            ? String(event.gatePin).trim()
+            : Math.floor(100000 + Math.random() * 900000).toString(),
         createdAt: now,
         updatedAt: now,
       }, { merge: true });

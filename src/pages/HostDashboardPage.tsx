@@ -215,6 +215,24 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     }
   };
 
+  const openVolunteerShare = async (evt: CollegeEvent) => {
+    if (evt.gatePin && /^\d{6}$/.test(String(evt.gatePin).trim())) {
+      setQrModalEvent(evt);
+      return;
+    }
+    const updated = await StorageService.ensureEventGatePin(
+      evt.eventId,
+      currentUser?.uid,
+      currentUser?.email
+    );
+    if (updated) {
+      onEventsUpdated();
+      setQrModalEvent(updated);
+    } else {
+      setQrModalEvent(evt);
+    }
+  };
+
   return (
     <div className="pb-20 w-full px-4 sm:px-6 lg:px-10 xl:px-12 pt-4 sm:pt-6">
       {/* Top Welcome Bar */}
@@ -494,6 +512,86 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Volunteer Gate PIN & QR Share Hub per Event */}
+          <div className="p-4 sm:p-5 rounded-3xl bg-white border border-slate-200 shadow-xs">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100 mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center shrink-0">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">Volunteer Gate PIN &amp; QR Access</h3>
+                  <p className="text-[11px] text-slate-500">
+                    Share each event&apos;s 6-digit Gate PIN or scannable QR code with gate staff (no organizer login needed)
+                  </p>
+                </div>
+              </div>
+              {onChangeTab && (
+                <button
+                  type="button"
+                  onClick={() => onChangeTab('host-events')}
+                  className="text-xs text-indigo-600 hover:text-indigo-800 font-bold transition flex items-center gap-1 cursor-pointer self-start sm:self-auto"
+                >
+                  <span>Manage All Events</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+
+            {hostEvents.length === 0 ? (
+              <div className="p-5 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-xs text-slate-500">
+                Publish an event first to generate its dedicated Volunteer Gate PIN and scannable QR code.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {hostEvents.map((evt) => (
+                  <div
+                    key={evt.eventId}
+                    className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-xs font-black text-slate-900 truncate">{evt.title}</p>
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                        {evt.gatePin ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(evt.gatePin || '');
+                              setCopiedPinEventId(evt.eventId);
+                              setTimeout(() => setCopiedPinEventId(null), 2000);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 border border-amber-300 text-[11px] font-mono font-bold hover:bg-amber-200 transition cursor-pointer"
+                            title="Copy 6-digit Gate PIN"
+                          >
+                            <KeyRound className="w-3 h-3 text-amber-700" />
+                            <span>PIN: {evt.gatePin}</span>
+                            {copiedPinEventId === evt.eventId ? (
+                              <Check className="w-3 h-3 text-emerald-700" />
+                            ) : (
+                              <Copy className="w-2.5 h-2.5 text-amber-700" />
+                            )}
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-amber-700 font-semibold">Click Share to generate PIN</span>
+                        )}
+                        <span className="text-[10px] text-slate-500 truncate">{evt.date}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => openVolunteerShare(evt)}
+                      className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-2xs transition active:scale-95 shrink-0 cursor-pointer"
+                    >
+                      <QrCode className="w-3.5 h-3.5 stroke-[2.3]" />
+                      <span>Share PIN &amp; QR</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* DYNAMIC & RESPONSIVE: Recent Gate Entries (Strictly this organizer's events & newest first on top) */}
@@ -784,7 +882,7 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                     }`}>
                       {evt.status.toUpperCase()}
                     </span>
-                    {evt.gatePin && (
+                    {evt.gatePin ? (
                       <button
                         type="button"
                         onClick={() => {
@@ -803,6 +901,15 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
                           <Copy className="w-2.5 h-2.5 text-amber-600" />
                         )}
                       </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => openVolunteerShare(evt)}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-200 text-[10px] font-bold hover:bg-amber-100 transition cursor-pointer"
+                      >
+                        <KeyRound className="w-3 h-3 text-amber-600" />
+                        <span>Generate Gate PIN</span>
+                      </button>
                     )}
                   </div>
                   <h4 className="text-sm font-black text-slate-900 truncate">{evt.title}</h4>
@@ -814,18 +921,16 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
 
               {/* Action Buttons */}
               <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto justify-start sm:justify-end border-t sm:border-t-0 border-slate-100 pt-2.5 sm:pt-0">
-                {/* Volunteer Gate Access: Code & Link */}
-                {evt.gatePin && (
-                  <button
-                    type="button"
-                    onClick={() => setQrModalEvent(evt)}
-                    className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
-                    title="View 6-Digit Gate Code & Direct Scanner Link to send to volunteers"
-                  >
-                    <KeyRound className="w-3.5 h-3.5 stroke-[2.4]" />
-                    <span>Volunteer Code & Link</span>
-                  </button>
-                )}
+                {/* Volunteer Gate Access: PIN & QR Code */}
+                <button
+                  type="button"
+                  onClick={() => openVolunteerShare(evt)}
+                  className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
+                  title="View & Share 6-Digit Gate PIN, QR Code & Direct Scanner Link for Volunteers"
+                >
+                  <QrCode className="w-3.5 h-3.5 stroke-[2.4]" />
+                  <span>Volunteer PIN &amp; QR</span>
+                </button>
                 {/* USER MANDATE: Only the host who created the event can edit it */}
                 {(evt.hostId === currentUser?.uid) ? (
                   <button
@@ -1138,6 +1243,10 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
           isOpen={!!qrModalEvent}
           onClose={() => setQrModalEvent(null)}
           onOpenVolunteerScanner={onOpenVolunteerScanner}
+          onEventUpdated={(updated) => {
+            setQrModalEvent(updated);
+            onEventsUpdated();
+          }}
         />
       )}
 

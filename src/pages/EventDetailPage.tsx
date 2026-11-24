@@ -28,6 +28,7 @@ interface EventDetailPageProps {
 export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack, onTicketPurchased }) => {
   const { currentUser } = useAuth();
   const [isVolunteerModalOpen, setIsVolunteerModalOpen] = useState(false);
+  const [displayGatePin, setDisplayGatePin] = useState(event.gatePin || '');
   const isHost = (currentUser?.uid && currentUser.uid === event.hostId) || 
                  (currentUser?.email && currentUser.email === event.hostEmail);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
@@ -125,7 +126,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
         </div>
 
         {/* If the viewer is the host of this event: Volunteer Gate Access Banner */}
-        {isHost && event.gatePin && (
+        {isHost && (
           <div className="mb-6 p-4 rounded-3xl bg-amber-50 border-2 border-amber-300 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center font-black shrink-0">
@@ -136,10 +137,13 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
                   Host Administration • Gate Volunteer Access
                 </span>
                 <p className="text-sm font-black text-slate-900">
-                  Gate Code: <span className="font-mono text-amber-950 tracking-widest">{event.gatePin}</span>
+                  Gate PIN:{' '}
+                  <span className="font-mono text-amber-950 tracking-widest">
+                    {displayGatePin || event.gatePin || 'Ready to Generate'}
+                  </span>
                 </p>
                 <p className="text-xs text-slate-600 font-medium">
-                  Copy the 6-digit Gate PIN or direct scanner link to share with your gate volunteers.
+                  Share the 6-digit Gate PIN, scannable QR code, or direct scanner link with your gate volunteers.
                 </p>
               </div>
             </div>
@@ -149,7 +153,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
               className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-xs transition active:scale-95 shrink-0 cursor-pointer"
             >
               <Share2 className="w-4 h-4" />
-              <span>Send Code & Link to Volunteers</span>
+              <span>Share Volunteer PIN &amp; QR</span>
             </button>
           </div>
         )}
@@ -363,9 +367,12 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
       {/* Volunteer Gate Access Share Modal (For Organizer) */}
       {isHost && (
         <VolunteerGateShareModal
-          event={event}
+          event={displayGatePin ? { ...event, gatePin: displayGatePin } : event}
           isOpen={isVolunteerModalOpen}
           onClose={() => setIsVolunteerModalOpen(false)}
+          onEventUpdated={(updated) => {
+            if (updated?.gatePin) setDisplayGatePin(updated.gatePin);
+          }}
         />
       )}
     </div>

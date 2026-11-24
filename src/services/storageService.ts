@@ -215,7 +215,18 @@ export class StorageService {
       fbEvents.forEach(e => {
         if (e?.eventId) {
           const prev = eventMap.get(e.eventId);
-          eventMap.set(e.eventId, prev ? { ...prev, ...e } : e);
+          eventMap.set(
+            e.eventId,
+            prev
+              ? {
+                  ...prev,
+                  ...e,
+                  gatePin:
+                    (e.gatePin && /^\d{6}$/.test(String(e.gatePin).trim()) ? String(e.gatePin).trim() : undefined) ||
+                    prev.gatePin,
+                }
+              : e
+          );
         }
       });
       this.saveEvents(Array.from(eventMap.values()), false);
@@ -536,6 +547,60 @@ export class StorageService {
     FirebaseDbService.updateEvent(eventId, updates).catch(e => console.warn('Cloud updateEvent error:', e));
 
     return updated;
+  }
+
+  /**
+   * Ensures an event has a valid 6-digit volunteer Gate PIN, generating & persisting one if missing.
+   */
+  static async ensureEventGatePin(
+    eventId: string,
+    requestingHostId?: string,
+    requestingHostEmail?: string
+  ): Promise<CollegeEvent | null> {
+    const existing = this.getEventById(eventId);
+    if (existing && /^\d{6}$/.test(String(existing.gatePin || '').trim())) {
+      return existing;
+    }
+    return this.regenerateGatePinAsync(eventId, requestingHostId, requestingHostEmail);
+  }
+
+  /**
+   * Generates a fresh unique 6-digit Gate PIN for an event and persists it across API, local cache, and Firestore.
+   */
+  static async regenerateGatePinAsync(
+    eventId: string,
+    requestingHostId?: string,
+    requestingHostEmail?: string
+  ): Promise<CollegeEvent | null> {
+    try {
+      const res = await fetch(`/api/events/${encodeURIComponent(eventId)}/regenerate-gate-pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestingHostId, requestingHostEmail }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.event) {
+          const events = this.getEvents();
+          const idx = events.findIndex((e) => e.eventId === eventId);
+          if (idx >= 0) {
+            events[idx] = { ...events[idx], ...data.event };
+          } else {
+            events.unshift(data.event);
+          }
+          this.markMutation(eventId);
+          this.saveEvents(events);
+          FirebaseDbService.updateEvent(eventId, { gatePin: data.event.gatePin }).catch(() => {});
+          return idx >= 0 ? events[idx] : data.event;
+        }
+      }
+    } catch {}
+
+    // Fallback to local update if server record was not yet synced
+    const current = this.getEventById(eventId);
+    if (!current) return null;
+    const newPin = Math.floor(100000 + Math.random() * 900000).toString();
+    return this.updateEvent(eventId, { gatePin: newPin }, requestingHostId, requestingHostEmail);
   }
 
   static deleteEvent(

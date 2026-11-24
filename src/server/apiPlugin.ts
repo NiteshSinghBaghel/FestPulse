@@ -114,8 +114,32 @@ function loadDatabase(): DatabaseSchema {
       !isLegacyDemoKeyId(storedRzp.keyId) &&
       !isLegacyDemoSecret(storedRzp.keySecret)
     );
-    return {
-      events: Array.isArray(parsed.events) ? parsed.events : [],
+    const eventsList: any[] = Array.isArray(parsed.events) ? parsed.events : [];
+    const usedPins = new Set<string>(
+      eventsList
+        .map((e) => String(e?.gatePin || '').trim())
+        .filter((p) => /^\d{6}$/.test(p))
+    );
+    let backfilledPins = false;
+    for (const evt of eventsList) {
+      if (evt && typeof evt === 'object' && !/^\d{6}$/.test(String(evt.gatePin || '').trim())) {
+        let nextPin = '';
+        for (let attempt = 0; attempt < 25; attempt++) {
+          const candidate = Math.floor(100000 + Math.random() * 900000).toString();
+          if (!usedPins.has(candidate)) {
+            nextPin = candidate;
+            break;
+          }
+        }
+        if (!nextPin) nextPin = Math.floor(100000 + Math.random() * 900000).toString();
+        usedPins.add(nextPin);
+        evt.gatePin = nextPin;
+        backfilledPins = true;
+      }
+    }
+
+    const dbState: DatabaseSchema = {
+      events: eventsList,
       tickets: Array.isArray(parsed.tickets) ? parsed.tickets : [],
       accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
       payouts: Array.isArray(parsed.payouts) ? parsed.payouts : [],
@@ -126,6 +150,10 @@ function loadDatabase(): DatabaseSchema {
       passwordResetTokens: parsed.passwordResetTokens || {},
       hostPayoutProfiles: parsed.hostPayoutProfiles && typeof parsed.hostPayoutProfiles === 'object' ? parsed.hostPayoutProfiles : {},
     };
+    if (backfilledPins) {
+      saveDatabase(dbState);
+    }
+    return dbState;
   } catch (error) {
     console.error('[API Server] Error loading database:', error);
     return {
@@ -687,18 +715,64 @@ const apiMiddleware = async (req: any, res: any, next: any) => {
               return sendJson(res, 400, { error: 'Invalid event data' });
             }
             const existingIdx = db.events.findIndex((e) => e.eventId === newEvent.eventId);
+            const existingEvent = existingIdx >= 0 ? db.events[existingIdx] : null;
+            const rawPin = String(newEvent.gatePin || existingEvent?.gatePin || '').trim();
+            if (!/^\d{6}$/.test(rawPin)) {
+              const used = new Set(db.events.map((e) => String(e?.gatePin || '').trim()));
+              let generated = Math.floor(100000 + Math.random() * 900000).toString();
+              for (let i = 0; i < 20 && used.has(generated); i++) {
+                generated = Math.floor(100000 + Math.random() * 900000).toString();
+              }
+              newEvent.gatePin = generated;
+            } else {
+              newEvent.gatePin = rawPin;
+            }
             if (existingIdx >= 0) {
-              db.events[existingIdx] = { ...db.events[existingIdx], ...newEvent, updatedAt: new Date().toISOString() };
+              db.events[existingIdx] = { ...existingEvent, ...newEvent, updatedAt: new Date().toISOString() };
             } else {
               db.events.unshift(newEvent);
             }
+            const savedEvent = existingIdx >= 0 ? db.events[existingIdx] : newEvent;
             saveDatabase(db);
             if (PostgresService.getConnected()) {
-              PostgresService.upsertEvent(newEvent).catch((e: any) => console.warn('Postgres event sync error:', e));
+              PostgresService.upsertEvent(savedEvent).catch((e: any) => console.warn('Postgres event sync error:', e));
             }
-            broadcastRealtime('events', { eventId: newEvent.eventId });
-            return sendJson(res, 200, { success: true, event: newEvent });
+            broadcastRealtime('events', { eventId: savedEvent.eventId });
+            return sendJson(res, 200, { success: true, event: savedEvent });
           }
+        }
+
+        if (url.startsWith('/api/events/') && url.endsWith('/regenerate-gate-pin') && req.method === 'POST') {
+          const eventId = url.replace('/api/events/', '').replace('/regenerate-gate-pin', '').split('?')[0].trim();
+          const body = await parseBody(req).catch(() => ({}));
+          const idx = db.events.findIndex((e) => e.eventId === eventId);
+          if (idx === -1) {
+            return sendJson(res, 404, { success: false, error: 'Event not found' });
+          }
+          const currentEvent = db.events[idx];
+          const reqHostId = (body?.requestingHostId || '').trim();
+          const reqHostEmail = (body?.requestingHostEmail || '').toLowerCase().trim();
+          if (reqHostId || reqHostEmail) {
+            const isOwner = Boolean(
+              (reqHostId && currentEvent.hostId === reqHostId) ||
+              (reqHostEmail && currentEvent.hostEmail && String(currentEvent.hostEmail).toLowerCase().trim() === reqHostEmail)
+            );
+            if (!isOwner) {
+              return sendJson(res, 403, { success: false, error: 'Unauthorized: Only the event organizer can regenerate its Gate PIN.' });
+            }
+          }
+          const used = new Set(db.events.map((e) => String(e?.gatePin || '').trim()));
+          let nextPin = Math.floor(100000 + Math.random() * 900000).toString();
+          for (let i = 0; i < 25 && (used.has(nextPin) || nextPin === currentEvent.gatePin); i++) {
+            nextPin = Math.floor(100000 + Math.random() * 900000).toString();
+          }
+          db.events[idx] = { ...currentEvent, gatePin: nextPin, updatedAt: new Date().toISOString() };
+          saveDatabase(db);
+          if (PostgresService.getConnected()) {
+            PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres gatePin update error:', e));
+          }
+          broadcastRealtime('events', { eventId });
+          return sendJson(res, 200, { success: true, gatePin: nextPin, event: db.events[idx] });
         }
 
         if (url.startsWith('/api/events/')) {
