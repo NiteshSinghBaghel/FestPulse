@@ -54,12 +54,25 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
   const ticketQrCanvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
-    if (isOpen && event.price > 0) {
-      PaymentService.getRazorpayGatewayConfig()
-        .then((cfg) => setGatewayConfig(cfg))
-        .catch(() => setGatewayConfig(null));
+    if (isOpen) {
+      setStep('form');
+      setErrorMessage('');
+      setFormErrors({});
+      setGeneratedTicket(null);
+      setTicketQuantity(1);
+      if (currentUser) {
+        setFullName((prev) => prev || currentUser.name || '');
+        setEmail((prev) => prev || currentUser.email || '');
+        setPhone((prev) => prev || currentUser.phone || '');
+        setCollegeName((prev) => prev || currentUser.college || '');
+      }
+      if (event.price > 0) {
+        PaymentService.getRazorpayGatewayConfig()
+          .then((cfg) => setGatewayConfig(cfg))
+          .catch(() => setGatewayConfig(null));
+      }
     }
-  }, [isOpen, event.price]);
+  }, [isOpen, event.eventId, event.price, currentUser]);
 
   // Render Pass QR on Success Screen
   useEffect(() => {
@@ -280,9 +293,6 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
 
   const handleModalClose = () => {
     if (step === 'processing' || step === 'verifying') return;
-    if (step === 'success' && generatedTicket) {
-      onSuccess(generatedTicket);
-    }
     onClose();
   };
 

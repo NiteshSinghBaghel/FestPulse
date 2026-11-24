@@ -148,6 +148,7 @@ export class PaymentService {
 
     const amountInPaise = Math.round(params.amountInRupees * 100);
     const cleanPhone = params.studentPhone ? params.studentPhone.replace(/\D/g, '').slice(-10) : '';
+    let didFail = false;
 
     const options = {
       key: activeKeyId,
@@ -158,6 +159,7 @@ export class PaymentService {
       order_id: params.orderId,
       handler: function (response: any) {
         if (!response?.razorpay_payment_id || !response?.razorpay_signature) {
+          didFail = true;
           if (params.onError) {
             params.onError('Incomplete payment response received from Razorpay.');
           }
@@ -184,7 +186,7 @@ export class PaymentService {
       },
       modal: {
         ondismiss: () => {
-          if (params.onDismiss) params.onDismiss();
+          if (!didFail && params.onDismiss) params.onDismiss();
         },
       },
     };
@@ -192,6 +194,7 @@ export class PaymentService {
     const rzp = new (window as any).Razorpay(options);
 
     rzp.on('payment.failed', function (response: any) {
+      didFail = true;
       const errObj = response?.error;
       const desc = errObj?.description || errObj?.reason || 'Payment could not be completed on Razorpay gateway.';
       if (params.onError) {

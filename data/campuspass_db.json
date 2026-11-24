@@ -454,8 +454,8 @@
     }
   ],
   "razorpayConfig": {
-    "keyId": "rzp_test_Tn2gGCmZM8sHv0",
-    "keySecret": "nLuBuOx9Mu7NzmTCbAX8hLfP",
+    "keyId": "",
+    "keySecret": "",
     "accountNumber": "",
     "webhookSecret": ""
   },
