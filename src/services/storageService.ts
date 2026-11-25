@@ -671,32 +671,34 @@ export class StorageService {
     if (!organizerId && !organizerEmail) return [];
     const cleanId = organizerId ? organizerId.trim() : '';
     const cleanEmail = organizerEmail ? organizerEmail.toLowerCase().trim() : '';
-    const hostTickets = this.getHostTickets(cleanId, cleanEmail);
+
+    const events = this.getEvents().filter(e => {
+      if (cleanId && e.hostId === cleanId) return true;
+      if (cleanEmail && e.hostEmail && e.hostEmail.toLowerCase().trim() === cleanEmail) return true;
+      return false;
+    });
+
+    const hostEventIds = new Set(events.map(e => e.eventId));
+    const allTickets = this.getTickets();
     const confirmedCountMap = new Map<string, number>();
-    hostTickets.forEach(t => {
-      if (t?.eventId && t.status === 'confirmed') {
+    for (const t of allTickets) {
+      if (t?.eventId && hostEventIds.has(t.eventId) && t.status === 'confirmed') {
         const qty = Math.max(1, Number(t.quantity) || 1);
         confirmedCountMap.set(t.eventId, (confirmedCountMap.get(t.eventId) || 0) + qty);
       }
-    });
+    }
 
-    return this.getEvents()
-      .filter(e => {
-        if (cleanId && e.hostId === cleanId) return true;
-        if (cleanEmail && e.hostEmail && e.hostEmail.toLowerCase().trim() === cleanEmail) return true;
-        return false;
-      })
-      .map(e => {
-        const confirmedQty = confirmedCountMap.get(e.eventId) || 0;
-        const effectiveSold = Math.max(Number(e.ticketsSold) || 0, confirmedQty);
-        const cap = Number(e.capacity) || 0;
-        return {
-          ...e,
-          ticketsSold: effectiveSold,
-          availableTickets: Math.max(0, cap - effectiveSold),
-          status: cap > 0 && effectiveSold >= cap ? ('sold_out' as const) : e.status,
-        };
-      });
+    return events.map(e => {
+      const confirmedQty = confirmedCountMap.get(e.eventId) || 0;
+      const effectiveSold = Math.max(Number(e.ticketsSold) || 0, confirmedQty);
+      const cap = Number(e.capacity) || 0;
+      return {
+        ...e,
+        ticketsSold: effectiveSold,
+        availableTickets: Math.max(0, cap - effectiveSold),
+        status: cap > 0 && effectiveSold >= cap ? ('sold_out' as const) : e.status,
+      };
+    });
   }
 
   static createEvent(eventData: Omit<CollegeEvent, 'eventId' | 'createdAt' | 'updatedAt' | 'ticketsSold' | 'availableTickets'>): CollegeEvent {
@@ -1059,8 +1061,12 @@ export class StorageService {
     const cleanId = organizerId ? organizerId.trim() : '';
     const cleanEmail = organizerEmail ? organizerEmail.toLowerCase().trim() : '';
     if (!cleanId && !cleanEmail) return [];
-    const hostEvents = this.getHostEvents(cleanId, cleanEmail);
-    const hostEventIds = new Set(hostEvents.map(e => e.eventId));
+    const events = this.getEvents();
+    const hostEventIds = new Set(
+      events
+        .filter(e => (cleanId && e.hostId === cleanId) || (cleanEmail && e.hostEmail && e.hostEmail.toLowerCase().trim() === cleanEmail))
+        .map(e => e.eventId)
+    );
     return this.getTickets().filter(t => {
       if (hostEventIds.has(t.eventId)) return true;
       if (cleanId && t.hostId === cleanId) return true;
