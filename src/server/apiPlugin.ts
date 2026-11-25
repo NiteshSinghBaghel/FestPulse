@@ -49,7 +49,6 @@ interface RazorpayConfigSchema {
   keyId: string;
   keySecret: string;
   accountNumber?: string;
-  webhookSecret?: string;
   updatedViaUi?: boolean;
 }
 
@@ -71,15 +70,13 @@ interface DatabaseSchema {
 }
 
 function readEnvRazorpayConfig(): RazorpayConfigSchema {
-  const keyId = getEnvKey('RAZORPAY_KEY_ID', '') || getEnvKey('VITE_RAZORPAY_KEY_ID', '');
+  const keyId = getEnvKey('RAZORPAY_KEY_ID', '');
   const keySecret = getEnvKey('RAZORPAY_KEY_SECRET', '');
   const rawAccount = getEnvKey('RAZORPAY_ACCOUNT_NUMBER', '');
-  const webhookSecret = getEnvKey('RAZORPAY_WEBHOOK_SECRET', '');
   return {
     keyId: isLegacyDemoKeyId(keyId) ? '' : keyId,
     keySecret: isLegacyDemoSecret(keySecret) ? '' : keySecret,
     accountNumber: rawAccount,
-    webhookSecret,
   };
 }
 
@@ -1531,7 +1528,6 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
           const keyId = ((hasEnvCreds ? envCfg.keyId : useStored ? stored.keyId : envCfg.keyId) || '').trim();
           const keySecret = ((hasEnvCreds ? envCfg.keySecret : useStored ? stored.keySecret : envCfg.keySecret) || '').trim();
           const accountNumber = ((hasEnvCreds ? envCfg.accountNumber : useStored ? stored.accountNumber : envCfg.accountNumber) || envCfg.accountNumber || '').trim();
-          const webhookSecret = ((hasEnvCreds ? envCfg.webhookSecret : useStored ? stored.webhookSecret : envCfg.webhookSecret) || envCfg.webhookSecret || '').trim();
           const isLive = keyId.startsWith('rzp_live_');
           const isConfigured = Boolean(
             keyId &&
@@ -1545,7 +1541,6 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
             keyId,
             keySecret,
             accountNumber,
-            webhookSecret,
             isLive,
             isConfigured,
             hasEnvCreds,
@@ -1629,7 +1624,6 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
               accountNumber: rzp.hasValidPayoutAccount
                 ? `${rzp.accountNumber.slice(0, 4)}••••${rzp.accountNumber.slice(-4)}`
                 : '',
-              webhookConfigured: Boolean(rzp.webhookSecret),
               source: rzp.source,
               centralized: true,
               merchantName: 'Fest-Plus College Events',
@@ -1650,7 +1644,6 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
               const newKeyId = (body.keyId || '').trim();
               const newKeySecret = (body.keySecret || '').trim();
               const newAccountNumber = (body.accountNumber || '').trim();
-              const newWebhookSecret = (body.webhookSecret || '').trim();
 
               if (!newKeyId || (!newKeyId.startsWith('rzp_live_') && !newKeyId.startsWith('rzp_test_'))) {
                 return sendJson(res, 400, { error: 'Valid Razorpay Key ID is required (must start with rzp_live_ or rzp_test_).' });
@@ -1674,7 +1667,6 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
                 keyId: newKeyId,
                 keySecret: effectiveSecret,
                 accountNumber: newAccountNumber.includes('••••') ? rzp.accountNumber : newAccountNumber,
-                webhookSecret: newWebhookSecret || rzp.webhookSecret || '',
                 updatedViaUi: true,
               };
               saveDatabase(db);
@@ -2229,68 +2221,6 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
           } catch (err: any) {
             console.error('[Razorpay Payout Exception]', err);
             return sendJson(res, 502, { success: false, error: err.message || 'Error processing RazorpayX settlement payout' });
-          }
-        }
-
-        // 10. Razorpay Webhook Event Listener (raw body HMAC verification)
-        if (url === '/api/razorpay/webhook' && req.method === 'POST') {
-          try {
-            const { raw: rawBody, json: body } = await parseRawBody(req);
-            const rzp = getActiveRzp();
-            const signature = String(req.headers['x-razorpay-signature'] || '').trim();
-
-            if (!rzp.webhookSecret) {
-              return sendJson(res, 503, { error: 'Razorpay webhook secret is not configured.' });
-            }
-            if (!signature) {
-              return sendJson(res, 400, { error: 'Missing x-razorpay-signature header.' });
-            }
-
-            const expectedSignature = crypto
-              .createHmac('sha256', rzp.webhookSecret)
-              .update(rawBody)
-              .digest('hex');
-
-            const expectedBuf = Buffer.from(expectedSignature, 'utf8');
-            const receivedBuf = Buffer.from(signature, 'utf8');
-            if (expectedBuf.length !== receivedBuf.length || !crypto.timingSafeEqual(expectedBuf, receivedBuf)) {
-              return sendJson(res, 400, { error: 'Invalid webhook signature' });
-            }
-
-            console.log('[Razorpay Webhook Event Verified]:', body.event);
-            if (body.event === 'payment.captured' && body.payload?.payment?.entity) {
-              const entity = body.payload.payment.entity;
-              if (!Array.isArray(db.payments)) db.payments = [];
-              const existing = db.payments.find((p: any) => p.paymentId === entity.id);
-              if (!existing) {
-                const webhookPayment = {
-                  paymentId: entity.id,
-                  orderId: entity.order_id || '',
-                  amount: Number(entity.amount || 0) / 100,
-                  currency: entity.currency || 'INR',
-                  status: 'captured',
-                  method: entity.method || 'razorpay_webhook',
-                  vpa: entity.vpa || undefined,
-                  timestamp: new Date().toISOString(),
-                  isLive: rzp.isLive,
-                };
-                db.payments.push(webhookPayment);
-                saveDatabase(db);
-                await MongoDbService.saveSnapshot(db).catch((e: any) =>
-                  console.warn('MongoDB webhook payment sync error:', e)
-                );
-                if (PostgresService.getConnected()) {
-                  await PostgresService.upsertPayment(webhookPayment).catch((e: any) =>
-                    console.warn('Postgres webhook payment sync error:', e)
-                  );
-                }
-                broadcastRealtime('payments', { paymentId: entity.id });
-              }
-            }
-
-            return sendJson(res, 200, { status: 'ok', event: body.event });
-          } catch (err: any) {
-            return sendJson(res, 500, { error: err.message || 'Webhook processing failed' });
           }
         }
 

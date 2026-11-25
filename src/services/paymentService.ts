@@ -2,14 +2,12 @@ import type { Ticket, PaymentRecord, PayoutRecord } from '../types';
 import { StorageService } from './storageService';
 import { FirebaseDbService } from './firebaseDbService';
 
-const envKeyId = ((import.meta as any).env?.VITE_RAZORPAY_KEY_ID as string) || '';
-
 // Public Razorpay Gateway metadata (Secrets stay strictly server-side)
 export const RAZORPAY_CONFIG = {
-  keyId: envKeyId,
+  keyId: '',
   merchantName: 'Fest-Plus',
   themeColor: '#4f46e5',
-  isLive: envKeyId.startsWith('rzp_live_'),
+  isLive: false,
 };
 
 export interface HostPayoutRequest {
@@ -75,7 +73,6 @@ export interface RazorpayGatewayConfigStatus {
   configurationError?: string;
   hasValidPayoutAccount: boolean;
   accountNumber?: string;
-  webhookConfigured: boolean;
   source?: string;
   centralized?: boolean;
   merchantName: string;
@@ -560,7 +557,6 @@ export class PaymentService {
       isLive: RAZORPAY_CONFIG.isLive,
       hasSecret: false,
       hasValidPayoutAccount: false,
-      webhookConfigured: false,
       merchantName: RAZORPAY_CONFIG.merchantName,
     };
   }
@@ -572,7 +568,6 @@ export class PaymentService {
     keyId: string;
     keySecret?: string;
     accountNumber?: string;
-    webhookSecret?: string;
   }): Promise<{ success: boolean; message?: string; error?: string; isLive?: boolean }> {
     try {
       const res = await fetch('/api/razorpay/config', {

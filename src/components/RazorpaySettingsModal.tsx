@@ -31,10 +31,8 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
   const [keyId, setKeyId] = useState('');
   const [keySecret, setKeySecret] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
-  const [webhookSecret, setWebhookSecret] = useState('');
   const [hasExistingSecret, setHasExistingSecret] = useState(false);
   const [hasValidPayoutAccount, setHasValidPayoutAccount] = useState(false);
-  const [webhookConfigured, setWebhookConfigured] = useState(false);
   const [configSource, setConfigSource] = useState<string>('env');
   const [showSecret, setShowSecret] = useState(false);
 
@@ -64,13 +62,11 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
     setSaveSuccess(null);
     setSaveError(null);
     setKeySecret('');
-    setWebhookSecret('');
     try {
       const cfg = await PaymentService.getRazorpayGatewayConfig();
       setKeyId(cfg.keyId || '');
       setHasExistingSecret(Boolean(cfg.hasSecret));
       setHasValidPayoutAccount(Boolean(cfg.hasValidPayoutAccount));
-      setWebhookConfigured(Boolean(cfg.webhookConfigured));
       setConfigSource(cfg.source || 'env');
       setAccountNumber(cfg.accountNumber || '');
     } catch (e) {
@@ -146,7 +142,6 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
         keyId: keyId.trim(),
         keySecret: keySecret.trim() || undefined,
         accountNumber: accountNumber.trim() || undefined,
-        webhookSecret: webhookSecret.trim() || undefined,
       });
 
       if (res.success) {
@@ -314,28 +309,6 @@ export const RazorpaySettingsModal: React.FC<RazorpaySettingsModalProps> = ({
             <p className="text-[10px] text-slate-400 mt-1">
               Required only for automated RazorpayX IMPS/UPI payouts from this dashboard. Ticket payments settle automatically to your Razorpay merchant bank account even if blank.
             </p>
-          </div>
-
-          {/* Webhook Secret (Optional) */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Razorpay Webhook Secret (Optional)</span>
-              </label>
-              {webhookConfigured && (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
-                  Configured
-                </span>
-              )}
-            </div>
-            <input
-              type="password"
-              placeholder={webhookConfigured ? 'Leave blank to keep existing webhook secret' : 'Enter Razorpay Webhook Secret'}
-              value={webhookSecret}
-              onChange={(e) => setWebhookSecret(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 text-xs font-mono focus:outline-none focus:border-indigo-500 focus:bg-white transition"
-            />
           </div>
 
           {/* Test Connection Button & Indicator */}
