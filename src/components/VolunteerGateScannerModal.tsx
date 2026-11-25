@@ -351,7 +351,7 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
         setFeedbackState(null);
         isScanningActiveRef.current = true;
         scanFrame();
-      }, 3000);
+      }, 3500);
     } else if (result.code === 'ALREADY_ENTERED') {
       playSound('error');
       setFeedbackState('already_entered');
@@ -363,7 +363,7 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
         setFeedbackState(null);
         isScanningActiveRef.current = true;
         scanFrame();
-      }, 2500);
+      }, 3500);
     } else if (result.success) {
       playSound('success');
       setFeedbackState('verified');
@@ -380,7 +380,7 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
         setFeedbackState(null);
         isScanningActiveRef.current = true;
         scanFrame();
-      }, 2000);
+      }, 3500);
     } else {
       playSound('error');
       setFeedbackState('invalid');
@@ -392,7 +392,7 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
         setFeedbackState(null);
         isScanningActiveRef.current = true;
         scanFrame();
-      }, 2200);
+      }, 3000);
     }
   };
 
@@ -688,83 +688,164 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
                 </div>
               )}
 
-              {/* ================= HIGH VISIBILITY 2-SECOND FULL FEEDBACK OVERLAY ================= */}
+              {/* ================= HIGH VISIBILITY FULL-VIEWPORT FEEDBACK OVERLAY ================= */}
               {feedbackState && (
                 <div
-                  className={`absolute inset-0 z-30 flex flex-col items-center justify-center p-6 text-center text-white backdrop-blur-md animate-in fade-in zoom-in-95 duration-150 ${
+                  className={`absolute inset-0 z-40 flex flex-col items-center justify-center p-6 text-center text-white backdrop-blur-md transition-all duration-200 ${
                     feedbackState === 'verified'
-                      ? 'bg-emerald-600/95'
+                      ? 'bg-[#062916]/95 border-4 border-emerald-400'
                       : feedbackState === 'already_entered'
-                      ? 'bg-rose-600/95'
+                      ? 'bg-[#380b12]/95 border-4 border-rose-500'
                       : feedbackState === 'wrong_event'
-                      ? 'bg-amber-600/95'
-                      : 'bg-rose-700/95'
+                      ? 'bg-[#3a1a05]/95 border-4 border-amber-500'
+                      : 'bg-[#380b12]/95 border-4 border-rose-500'
                   }`}
                 >
                   {feedbackState === 'verified' && (
-                    <>
-                      <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mb-3 animate-bounce">
-                        <CheckCircle2 className="w-12 h-12 text-white" />
+                    <div className="w-full max-w-sm flex flex-col items-center">
+                      <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-4 border-emerald-400 text-emerald-400 flex items-center justify-center shadow-2xl mb-2 animate-bounce">
+                        <CheckCircle2 className="w-10 h-10 text-emerald-400" />
                       </div>
-                      <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-wider">
-                        ENTRY ALLOWED
+
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider mb-1.5 shadow-md">
+                        <Users className="w-3.5 h-3.5 stroke-[2.5]" />
+                        <span>ADMIT {activeScannedTicket?.quantity || 1} {(activeScannedTicket?.quantity || 1) > 1 ? 'VISITORS' : 'VISITOR'}</span>
+                      </div>
+
+                      <h2 className="text-2xl font-black text-emerald-300 tracking-tight">
+                        ENTRY ALLOWED ✓
                       </h2>
-                      <p className="text-base font-bold text-emerald-100 mt-1">
-                        Welcome, {activeScannedTicket?.userName || 'Attendee'}!
+                      <p className="text-xs font-semibold text-emerald-100 mt-0.5">
+                        Pass Verified • Welcome to the Event!
                       </p>
-                      <div className="mt-3 px-3 py-1 rounded-full bg-black/30 font-mono text-xs">
-                        Pass ID: {activeScannedTicket?.ticketId} • Qty: {activeScannedTicket?.quantity || 1}
+
+                      {activeScannedTicket && (
+                        <div className="mt-3 px-4 py-2.5 rounded-2xl bg-black/60 border border-emerald-500/30 text-xs text-emerald-100 w-full text-left space-y-1">
+                          <p className="truncate"><b>Attendee:</b> {activeScannedTicket.userName} {activeScannedTicket.rollNo ? `(${activeScannedTicket.rollNo})` : ''}</p>
+                          <p className="font-mono text-[11px] text-emerald-300"><b>Pass ID:</b> {activeScannedTicket.ticketId}</p>
+                          <p className="text-[11px] text-emerald-300"><b>Checked In:</b> {activeScannedTicket.entryTime || 'Just now'}</p>
+                        </div>
+                      )}
+
+                      <div className="mt-3 w-40 h-1.5 bg-emerald-950 rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-400 rounded-full animate-pulse" style={{ width: '100%' }} />
                       </div>
-                    </>
+                      <span className="text-[10px] text-emerald-300 mt-1 font-medium">
+                        Ready for next attendee in 3.5s...
+                      </span>
+                    </div>
                   )}
 
                   {feedbackState === 'already_entered' && (
-                    <>
-                      <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mb-3 animate-shake">
-                        <X className="w-12 h-12 text-white" />
+                    <div className="w-full max-w-sm flex flex-col items-center">
+                      <div className="w-16 h-16 rounded-full bg-rose-500/20 border-4 border-rose-500 text-rose-500 flex items-center justify-center shadow-2xl mb-2">
+                        <span className="text-3xl font-black leading-none pb-0.5">✕</span>
                       </div>
-                      <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-wider">
+
+                      <h2 className="text-2xl font-black text-rose-300 tracking-tight">
                         ALREADY ENTERED!
                       </h2>
-                      <p className="text-sm font-bold text-rose-100 mt-1 max-w-xs">
-                        This pass was already scanned at {activeScannedTicket?.entryTime || 'earlier today'}.
+                      <p className="text-xs font-semibold text-rose-100 mt-0.5">
+                        Ticket already checked in! Duplicate entry rejected.
                       </p>
-                      <p className="text-xs font-black uppercase tracking-widest text-amber-300 mt-2">
+
+                      {activeScannedTicket && (
+                        <div className="mt-3 px-4 py-2.5 rounded-2xl bg-black/60 border border-rose-500/30 text-xs text-rose-100 w-full text-left space-y-1">
+                          <p className="truncate"><b>Attendee:</b> {activeScannedTicket.userName}</p>
+                          <p className="font-mono text-[11px] text-rose-300"><b>Pass ID:</b> {activeScannedTicket.ticketId}</p>
+                          <p className="text-[11px] text-rose-300"><b>First Check-in:</b> {activeScannedTicket.entryTime || 'Earlier today'}</p>
+                        </div>
+                      )}
+
+                      <p className="text-[11px] font-black uppercase tracking-widest text-amber-300 mt-2">
                         DO NOT ADMIT (DUPLICATE PASS)
                       </p>
-                    </>
+
+                      <div className="mt-2.5 w-40 h-1.5 bg-rose-950 rounded-full overflow-hidden">
+                        <div className="h-full bg-rose-500 rounded-full animate-pulse" style={{ width: '100%' }} />
+                      </div>
+                      <span className="text-[10px] text-rose-300 mt-1 font-medium">
+                        Resuming camera in 3.5s...
+                      </span>
+                    </div>
                   )}
 
                   {feedbackState === 'wrong_event' && (
-                    <>
-                      <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mb-3">
-                        <ShieldAlert className="w-12 h-12 text-white" />
+                    <div className="w-full max-w-sm flex flex-col items-center">
+                      <div className="w-16 h-16 rounded-full bg-amber-500/20 border-4 border-amber-500 text-amber-400 flex items-center justify-center shadow-2xl mb-2">
+                        <ShieldAlert className="w-8 h-8 text-amber-400" />
                       </div>
-                      <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-wider">
+
+                      <h2 className="text-2xl font-black text-amber-300 tracking-tight">
                         WRONG EVENT!
                       </h2>
-                      <p className="text-sm font-bold text-amber-100 mt-1 max-w-xs">
-                        This pass is for "{activeScannedTicket?.eventTitle || 'Another Event'}", not for this gate!
+                      <p className="text-xs font-semibold text-amber-100 mt-0.5">
+                        {feedbackMessage}
                       </p>
-                    </>
+
+                      {activeScannedTicket && (
+                        <div className="mt-3 px-4 py-2.5 rounded-2xl bg-black/60 border border-amber-500/30 text-xs text-amber-100 w-full text-left space-y-1">
+                          <p className="truncate"><b>Pass Belongs To:</b> {activeScannedTicket.eventTitle || 'Another Event'}</p>
+                          <p className="truncate"><b>Attendee:</b> {activeScannedTicket.userName}</p>
+                          <p className="font-mono text-[11px] text-amber-300"><b>Pass ID:</b> {activeScannedTicket.ticketId}</p>
+                        </div>
+                      )}
+
+                      <div className="mt-2.5 w-40 h-1.5 bg-amber-950 rounded-full overflow-hidden">
+                        <div className="h-full bg-amber-400 rounded-full animate-pulse" style={{ width: '100%' }} />
+                      </div>
+                      <span className="text-[10px] text-amber-300 mt-1 font-medium">
+                        Resuming camera in 3.5s...
+                      </span>
+                    </div>
                   )}
 
                   {feedbackState === 'invalid' && (
-                    <>
-                      <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mb-3">
-                        <AlertCircle className="w-12 h-12 text-white" />
+                    <div className="w-full max-w-sm flex flex-col items-center">
+                      <div className="w-16 h-16 rounded-full bg-rose-500/20 border-4 border-rose-500 text-rose-500 flex items-center justify-center shadow-2xl mb-2">
+                        <AlertCircle className="w-8 h-8 text-rose-400" />
                       </div>
-                      <h2 className="text-2xl sm:text-3xl font-black uppercase tracking-wider">
+
+                      <h2 className="text-2xl font-black text-rose-300 tracking-tight">
                         INVALID PASS
                       </h2>
-                      <p className="text-xs font-bold text-rose-200 mt-1">
+                      <p className="text-xs font-bold text-rose-100 mt-1">
                         {feedbackMessage}
                       </p>
-                    </>
+
+                      <div className="mt-3 w-40 h-1.5 bg-rose-950 rounded-full overflow-hidden">
+                        <div className="h-full bg-rose-500 rounded-full animate-pulse" style={{ width: '100%' }} />
+                      </div>
+                      <span className="text-[10px] text-rose-300 mt-1 font-medium">
+                        Resuming camera in 3s...
+                      </span>
+                    </div>
                   )}
                 </div>
               )}
             </div>
+
+            {/* Last Verified Ticket Card Preview (Sticky under camera) */}
+            {lastScannedTicket && (
+              <div className="p-3 bg-emerald-50/90 border-t border-b border-emerald-200 flex items-center justify-between gap-3 text-xs shrink-0">
+                <div className="min-w-0 flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center font-black text-xs shrink-0 shadow-xs">
+                    ✓
+                  </span>
+                  <div className="truncate">
+                    <p className="font-bold text-emerald-950 truncate">
+                      Last Admitted: {lastScannedTicket.userName}
+                    </p>
+                    <p className="font-mono text-[10px] text-emerald-700 truncate">
+                      {lastScannedTicket.ticketId} • {lastScannedTicket.quantity || 1} Visitor(s) • Checked in at {lastScannedTicket.entryTime || 'Just now'}
+                    </p>
+                  </div>
+                </div>
+                <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-wider shrink-0">
+                  ADMITTED
+                </span>
+              </div>
+            )}
 
             {/* Quick Manual Entry Option & Recent Check-ins */}
             <div className="p-3 sm:p-4 bg-white border-t border-slate-200 shrink-0">
