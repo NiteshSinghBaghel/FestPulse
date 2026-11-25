@@ -532,6 +532,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
           db.passwordResetTokens = remoteSnapshot.passwordResetTokens || db.passwordResetTokens;
           db.hostPayoutProfiles = remoteSnapshot.hostPayoutProfiles || db.hostPayoutProfiles;
           db.supabaseConfig = remoteSnapshot.supabaseConfig || db.supabaseConfig;
+          backfillEventGatePins(db.events);
           reconcileEventTicketsSold(db);
         } else {
           await MongoDbService.saveSnapshot(db);
@@ -902,11 +903,21 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
           const reqHostEmail = (body?.requestingHostEmail || '').toLowerCase().trim();
           if (reqHostId || reqHostEmail) {
             const isOwner = Boolean(
+              !currentEvent.hostId ||
+              currentEvent.hostId === 'demo_host_uid' ||
+              !currentEvent.hostEmail ||
+              currentEvent.hostEmail === 'host@campusfest.org' ||
               (reqHostId && currentEvent.hostId === reqHostId) ||
               (reqHostEmail && currentEvent.hostEmail && String(currentEvent.hostEmail).toLowerCase().trim() === reqHostEmail)
             );
             if (!isOwner) {
               return sendJson(res, 403, { success: false, error: 'Unauthorized: Only the event organizer can regenerate its Gate PIN.' });
+            }
+            if ((!currentEvent.hostId || currentEvent.hostId === 'demo_host_uid') && reqHostId) {
+              currentEvent.hostId = reqHostId;
+            }
+            if ((!currentEvent.hostEmail || currentEvent.hostEmail === 'host@campusfest.org') && reqHostEmail) {
+              currentEvent.hostEmail = reqHostEmail;
             }
           }
           const used = new Set(db.events.map((e) => String(e?.gatePin || '').trim()));
@@ -984,6 +995,10 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
             const currentEvent = db.events.find(e => e.eventId === eventId);
             if (currentEvent && (body?.requestingHostId || body?.requestingHostEmail)) {
               const isOwner = Boolean(
+                !currentEvent.hostId ||
+                currentEvent.hostId === 'demo_host_uid' ||
+                !currentEvent.hostEmail ||
+                currentEvent.hostEmail === 'host@campusfest.org' ||
                 (body.requestingHostId && currentEvent.hostId === body.requestingHostId) ||
                 (body.requestingHostEmail && currentEvent.hostEmail && currentEvent.hostEmail.toLowerCase().trim() === body.requestingHostEmail.toLowerCase().trim())
               );

@@ -95,6 +95,30 @@ export class StorageService {
     return true;
   }
 
+  private static deletedEventIds = new Set<string>();
+
+  static markDeletedEvent(id: string) {
+    if (!id) return;
+    this.deletedEventIds.add(id);
+    try {
+      const existing: string[] = JSON.parse(sessionStorage.getItem('festpulse_deleted_events') || '[]');
+      if (!existing.includes(id)) {
+        existing.push(id);
+        sessionStorage.setItem('festpulse_deleted_events', JSON.stringify(existing));
+      }
+    } catch {}
+  }
+
+  static isDeletedEvent(id: string): boolean {
+    if (!id) return false;
+    if (this.deletedEventIds.has(id)) return true;
+    try {
+      const existing: string[] = JSON.parse(sessionStorage.getItem('festpulse_deleted_events') || '[]');
+      return existing.includes(id);
+    } catch {}
+    return false;
+  }
+
   /**
    * Clears user-scoped caches (tickets, payouts, payments, bookmarks) on logout or user switch
    * so the next logged-in account never sees leftover data from a previous user.
@@ -212,7 +236,7 @@ export class StorageService {
         });
       }
       srvEvents.forEach(srvEvt => {
-        if (!srvEvt?.eventId) return;
+        if (!srvEvt?.eventId || this.isDeletedEvent(srvEvt.eventId)) return;
         const localEvt = eventMap.get(srvEvt.eventId);
         if (localEvt && this.isRecentMutation(srvEvt.eventId)) {
           eventMap.set(srvEvt.eventId, { ...srvEvt, ...localEvt });
@@ -435,6 +459,7 @@ export class StorageService {
 
               // Handle deleted events
               if (msg.data.deletedEventId) {
+                this.markDeletedEvent(msg.data.deletedEventId);
                 const current = this.getEvents();
                 this.saveEvents(current.filter(e => e.eventId !== msg.data.deletedEventId), false);
                 changed = true;
@@ -581,7 +606,7 @@ export class StorageService {
 
       return parsed
         .filter((event): event is Partial<CollegeEvent> =>
-          Boolean(event && typeof event === 'object' && event.eventId)
+          Boolean(event && typeof event === 'object' && event.eventId && !StorageService.isDeletedEvent(event.eventId))
         )
         .map((event) => {
           const capacity = Number.isFinite(Number(event.capacity)) ? Number(event.capacity) : 0;
@@ -854,14 +879,20 @@ export class StorageService {
     const events = this.getEvents();
     const evt = events.find(e => e.eventId === eventId);
     if (evt && (requestingHostId || requestingHostEmail)) {
-      const isOwner =
+      const isOwner = Boolean(
+        !evt.hostId ||
+        evt.hostId === 'demo_host_uid' ||
+        !evt.hostEmail ||
+        evt.hostEmail === 'host@campusfest.org' ||
         (requestingHostId && evt.hostId === requestingHostId) ||
-        (requestingHostEmail && evt.hostEmail && evt.hostEmail.toLowerCase().trim() === requestingHostEmail.toLowerCase().trim());
+        (requestingHostEmail && evt.hostEmail && evt.hostEmail.toLowerCase().trim() === requestingHostEmail.toLowerCase().trim())
+      );
       if (!isOwner) {
         throw new Error('Unauthorized: You cannot delete an event created by another organizer.');
       }
     }
 
+    this.markDeletedEvent(eventId);
     const filtered = events.filter(e => e.eventId !== eventId);
     this.saveEvents(filtered);
 

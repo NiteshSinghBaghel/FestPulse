@@ -226,23 +226,20 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
   };
 
   const openVolunteerShare = async (evt: CollegeEvent) => {
-    if (evt.gatePin && /^\d{6}$/.test(String(evt.gatePin).trim())) {
-      setQrModalEvent(evt);
-      void StorageService.syncEventToServerAsync(evt);
-      return;
+    let targetEvt = evt;
+    if (!targetEvt.gatePin || !/^\d{6}$/.test(String(targetEvt.gatePin).trim())) {
+      const updated = await StorageService.ensureEventGatePin(
+        targetEvt.eventId,
+        currentUser?.uid,
+        currentUser?.email
+      );
+      if (updated) {
+        targetEvt = updated;
+      }
     }
-    const updated = await StorageService.ensureEventGatePin(
-      evt.eventId,
-      currentUser?.uid,
-      currentUser?.email
-    );
-    if (updated) {
-      void StorageService.syncEventToServerAsync(updated);
-      onEventsUpdated();
-      setQrModalEvent(updated);
-    } else {
-      setQrModalEvent(evt);
-    }
+    await StorageService.syncEventToServerAsync(targetEvt);
+    onEventsUpdated();
+    setQrModalEvent(targetEvt);
   };
 
   return (
