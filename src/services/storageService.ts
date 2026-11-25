@@ -211,7 +211,15 @@ export class StorageService {
           }
         });
       }
-      srvEvents.forEach(e => { if (e?.eventId) eventMap.set(e.eventId, e); });
+      srvEvents.forEach(srvEvt => {
+        if (!srvEvt?.eventId) return;
+        const localEvt = eventMap.get(srvEvt.eventId);
+        if (localEvt && this.isRecentMutation(srvEvt.eventId)) {
+          eventMap.set(srvEvt.eventId, { ...srvEvt, ...localEvt });
+        } else {
+          eventMap.set(srvEvt.eventId, srvEvt);
+        }
+      });
       fbEvents.forEach(e => {
         if (e?.eventId) {
           const prev = eventMap.get(e.eventId);
@@ -708,17 +716,31 @@ export class StorageService {
 
     const currentEvt = events[idx];
     if (requestingHostId || requestingHostEmail) {
-      const isOwner =
+      const isOwner = Boolean(
+        !currentEvt.hostId ||
+        currentEvt.hostId === 'demo_host_uid' ||
+        !currentEvt.hostEmail ||
+        currentEvt.hostEmail === 'host@campusfest.org' ||
         (requestingHostId && currentEvt.hostId === requestingHostId) ||
-        (requestingHostEmail && currentEvt.hostEmail && currentEvt.hostEmail.toLowerCase().trim() === requestingHostEmail.toLowerCase().trim());
+        (requestingHostEmail && currentEvt.hostEmail && currentEvt.hostEmail.toLowerCase().trim() === requestingHostEmail.toLowerCase().trim())
+      );
       if (!isOwner) {
         throw new Error('Unauthorized: You cannot edit an event created by another organizer.');
       }
     }
 
+    const hostUpdates: Partial<CollegeEvent> = {};
+    if ((!currentEvt.hostId || currentEvt.hostId === 'demo_host_uid') && requestingHostId) {
+      hostUpdates.hostId = requestingHostId;
+    }
+    if ((!currentEvt.hostEmail || currentEvt.hostEmail === 'host@campusfest.org') && requestingHostEmail) {
+      hostUpdates.hostEmail = requestingHostEmail;
+    }
+
     const updated = {
       ...currentEvt,
       ...updates,
+      ...hostUpdates,
       updatedAt: new Date().toISOString(),
     };
 
@@ -731,11 +753,19 @@ export class StorageService {
     this.markMutation(eventId);
     this.saveEvents(events);
 
-    // 1. Sync to Cloud Server API
+    // 1. Sync to Cloud Server API with auto-upsert fallback
     fetch(`/api/events/${eventId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...updates, requestingHostId, requestingHostEmail }),
+      body: JSON.stringify({ ...updates, ...hostUpdates, requestingHostId, requestingHostEmail }),
+    }).then(async (res) => {
+      if (res.status === 404) {
+        fetch('/api/events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updated),
+        }).catch(() => {});
+      }
     }).catch(e => console.warn('Cloud API updateEvent warning:', e));
 
     // 2. Sync to Firestore

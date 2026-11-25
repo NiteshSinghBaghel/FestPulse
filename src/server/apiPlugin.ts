@@ -927,20 +927,45 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
           const eventId = url.replace('/api/events/', '').split('?')[0];
           if (req.method === 'PUT') {
             const updates = await parseBody(req);
-            const idx = db.events.findIndex((e) => e.eventId === eventId);
+            let idx = db.events.findIndex((e) => e.eventId === eventId);
             if (idx === -1) {
-              return sendJson(res, 404, { error: 'Event not found' });
+              // Auto-upsert if event doesn't exist on server yet
+              const newEvent = {
+                eventId,
+                ...updates,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              };
+              delete newEvent.requestingHostId;
+              delete newEvent.requestingHostEmail;
+              db.events.unshift(newEvent);
+              saveDatabase(db);
+              if (PostgresService.getConnected()) {
+                await PostgresService.upsertEvent(newEvent).catch(() => {});
+              }
+              broadcastRealtime('events', { eventId }, { events: db.events.filter((e: any) => e.status !== 'draft') });
+              return sendJson(res, 200, { success: true, event: newEvent });
             }
 
             const currentEvent = db.events[idx];
-            if (updates.requestingHostId || updates.requestingHostEmail) {
-              const isOwner = Boolean(
-                (updates.requestingHostId && currentEvent.hostId === updates.requestingHostId) ||
-                (updates.requestingHostEmail && currentEvent.hostEmail && currentEvent.hostEmail.toLowerCase().trim() === updates.requestingHostEmail.toLowerCase().trim())
-              );
-              if (!isOwner) {
-                return sendJson(res, 403, { error: "Unauthorized: You cannot edit another organizer's event." });
-              }
+            const isOwner = Boolean(
+              !currentEvent.hostId ||
+              currentEvent.hostId === 'demo_host_uid' ||
+              !currentEvent.hostEmail ||
+              currentEvent.hostEmail === 'host@campusfest.org' ||
+              (updates.requestingHostId && currentEvent.hostId === updates.requestingHostId) ||
+              (updates.requestingHostEmail && currentEvent.hostEmail && currentEvent.hostEmail.toLowerCase().trim() === updates.requestingHostEmail.toLowerCase().trim())
+            );
+            if (!isOwner) {
+              return sendJson(res, 403, { error: "Unauthorized: You cannot edit another organizer's event." });
+            }
+
+            // Claim demo or unowned event
+            if ((!currentEvent.hostId || currentEvent.hostId === 'demo_host_uid') && updates.requestingHostId) {
+              currentEvent.hostId = updates.requestingHostId;
+            }
+            if ((!currentEvent.hostEmail || currentEvent.hostEmail === 'host@campusfest.org') && updates.requestingHostEmail) {
+              currentEvent.hostEmail = updates.requestingHostEmail;
             }
 
             delete updates.requestingHostId;
