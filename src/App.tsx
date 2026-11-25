@@ -88,7 +88,8 @@ export const App: React.FC = () => {
   }, []);
 
   // Load strictly user/role-scoped events & tickets from StorageService
-  const refreshData = useCallback(() => {
+  // Debounced so rapid successive calls (SSE + onDataChanged + focus) collapse into one render
+  const refreshDataRaw = useCallback(() => {
     const evts = StorageService.getEvents();
     setEvents(evts);
 
@@ -102,6 +103,16 @@ export const App: React.FC = () => {
       setTickets([]);
     }
   }, [currentUser, role]);
+
+  // Debounce: collapse multiple rapid refreshData calls into a single React render
+  const refreshTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshData = useCallback(() => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      refreshTimerRef.current = null;
+      refreshDataRaw();
+    }, 30);
+  }, [refreshDataRaw]);
 
   // Synchronize URL & view state from current window.location
   const syncStateFromUrl = useCallback(() => {

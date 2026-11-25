@@ -354,10 +354,12 @@ export class StorageService {
     let unsubPayouts: (() => void) | null = null;
 
     let syncPending = false;
+    // Unique ID for this tab so BroadcastChannel can ignore its own posts
+    const thisTabId = `tab_${Date.now()}_${Math.random()}`;
+
     const triggerSync = () => {
       if (disposed) return;
       if (this.isSyncing) {
-        // Mark that another sync is needed after this one finishes
         syncPending = true;
         return;
       }
@@ -373,11 +375,12 @@ export class StorageService {
     };
 
     // 1. Cross-tab instant synchronization via BroadcastChannel
+    // Ignore messages that originated from THIS tab to prevent self-loop
     try {
       if (typeof BroadcastChannel !== 'undefined') {
         channel = new BroadcastChannel(REALTIME_CHANNEL_NAME);
-        channel.onmessage = () => {
-          if (!disposed) {
+        channel.onmessage = (evt) => {
+          if (!disposed && evt.data?.fromTabId !== thisTabId) {
             triggerSync();
           }
         };
@@ -394,7 +397,7 @@ export class StorageService {
             const msg = JSON.parse(evt.data || '{}');
             if (!msg.type || msg.type === 'connected') return;
 
-            // If the SSE message carries inline data, apply it directly — no extra /api/sync round-trip
+            // If the SSE message carries inline data, apply directly — no /api/sync round-trip
             if (msg.data) {
               let changed = false;
 
@@ -412,7 +415,7 @@ export class StorageService {
                 changed = true;
               }
 
-              // Handle updated/new events list
+              // Handle updated/new events list (server wins, merge over local)
               if (Array.isArray(msg.data.events)) {
                 const local = this.getEvents();
                 const map = new Map<string, CollegeEvent>();
@@ -422,7 +425,7 @@ export class StorageService {
                 changed = true;
               }
 
-              // Handle updated/new tickets (merge new tickets in, update existing ones)
+              // Handle updated/new tickets (merge, server wins)
               if (Array.isArray(msg.data.tickets)) {
                 const local = this.getTickets();
                 const map = new Map<string, Ticket>();
@@ -433,13 +436,19 @@ export class StorageService {
               }
 
               if (changed) {
-                window.dispatchEvent(new Event('campuspass_data_updated'));
+                // onDataChanged() triggers refreshData() in App.tsx — that's the single UI update
+                // Do NOT call window.dispatchEvent here too (would cause double render/flicker)
                 onDataChanged();
-                // Also kick a background sync to ensure we have full scoped data (non-blocking)
-                setTimeout(() => {
-                  if (!disposed) this.syncFromCloud(session).then(() => { if (!disposed) onDataChanged(); });
-                }, 500);
-                return; // skip immediate full syncFromCloud
+                // Notify OTHER tabs via BroadcastChannel so they also sync
+                // Tagged with thisTabId so THIS tab's channel.onmessage ignores it (no self-loop)
+                try {
+                  if (typeof BroadcastChannel !== 'undefined') {
+                    const ch = new BroadcastChannel(REALTIME_CHANNEL_NAME);
+                    ch.postMessage({ type: msg.type, fromTabId: thisTabId, timestamp: Date.now() });
+                    ch.close();
+                  }
+                } catch {}
+                return; // *** Do NOT call triggerSync — prevents flicker from second HTTP round-trip ***
               }
             }
 
