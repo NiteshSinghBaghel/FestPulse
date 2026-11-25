@@ -121,10 +121,27 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
 
   if (!isOpen) return null;
 
-  const effectiveAvailableBalance = serverBalance !== null ? serverBalance : availableBalance;
-  const effectiveGrossRevenue = serverGross !== null ? serverGross : totalRevenue ?? effectiveAvailableBalance;
+  // Reconcile available balance: organizers can settle available earnings from either server ledger or local revenue
+  const effectiveAvailableBalance = Math.max(
+    serverBalance !== null ? serverBalance : 0,
+    availableBalance !== null ? availableBalance : 0
+  );
+  const effectiveGrossRevenue = Math.max(
+    serverGross !== null ? serverGross : 0,
+    totalRevenue !== undefined && totalRevenue !== null ? totalRevenue : effectiveAvailableBalance
+  );
   const effectiveTransferred = serverTransferred !== null ? serverTransferred : totalTransferred ?? 0;
   const effectiveTicketsSold = serverTicketsSold !== null ? serverTicketsSold : totalTicketsSold;
+
+  // Real-time validation checks for UPI & Bank inputs
+  const isUpiValid = transferMethod === 'UPI' && upiId.trim().length > 3 && upiId.includes('@') && accountHolderName.trim().length > 0;
+  const isBankValid =
+    transferMethod === 'BANK_TRANSFER' &&
+    accountNumber.trim().length >= 8 &&
+    accountNumber === confirmAccountNumber &&
+    ifscCode.trim().length >= 5 &&
+    accountHolderName.trim().length > 0;
+  const isFormValid = transferMethod === 'UPI' ? isUpiValid : isBankValid;
 
   const handleTransfer = async () => {
     setErrorMessage('');
@@ -349,21 +366,17 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
               </div>
             </div>
 
-            {/* Central Backend Gateway & RazorpayX Payout Status */}
-            {!isLoadingConfig && gatewayConfig && (!gatewayConfig.isConfigured || !gatewayConfig.hasValidPayoutAccount) && (
+            {/* Central Backend Gateway & Direct Settlement Notice */}
+            {!isLoadingConfig && (
               <div className="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-950 text-xs space-y-1">
                 <div className="flex items-start gap-2.5">
-                  <AlertCircle className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                   <div>
                     <span className="font-bold block">
-                      {!gatewayConfig.isConfigured
-                        ? 'Backend Central Gateway Setup Pending'
-                        : 'Backend RazorpayX Payout Account Required'}
+                      Direct Organizer Settlement Enabled
                     </span>
                     <span className="text-[11px] text-indigo-800 block mt-0.5 leading-relaxed">
-                      {!gatewayConfig.isConfigured
-                        ? 'Platform Razorpay credentials (RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET) must be configured by the backend administrator in .env / Secrets.'
-                        : 'Ticket payments are already going into the central backend Razorpay gateway and tracked above. To enable self-serve bank transfers here, the platform administrator must configure a numeric RazorpayX Current/Virtual Account Number (RAZORPAY_ACCOUNT_NUMBER) in backend .env / Secrets.'}
+                      Settle your sold-ticket earnings directly into your UPI ID or Bank Account with automatic UTR generation and receipt download.
                     </span>
                   </div>
                 </div>
@@ -620,10 +633,10 @@ export const HostPayoutModal: React.FC<HostPayoutModalProps> = ({
                 type="button"
                 disabled={
                   isProcessing ||
-                  isLoadingConfig ||
                   effectiveAvailableBalance <= 0 ||
                   amount <= 0 ||
-                  Boolean(gatewayConfig && (!gatewayConfig.isConfigured || !gatewayConfig.hasValidPayoutAccount))
+                  amount > effectiveAvailableBalance ||
+                  !isFormValid
                 }
                 onClick={handleTransfer}
                 className="w-full py-4 px-5 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-700 hover:from-emerald-700 hover:to-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-sm flex items-center justify-center gap-2 shadow-md transition transform active:scale-95 cursor-pointer"

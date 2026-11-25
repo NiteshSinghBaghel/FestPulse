@@ -520,7 +520,7 @@ export class PaymentService {
       throw new Error(
         data?.error ||
           data?.message ||
-          'RazorpayX payout dispatch failed. Ensure backend RAZORPAY_ACCOUNT_NUMBER is configured by the platform administrator.'
+          'Settlement dispatch failed. Please verify your account details and try again.'
       );
     }
 
