@@ -357,7 +357,13 @@ const sseClients = new Set<any>();
 
 function broadcastRealtime(type: string, meta?: Record<string, any>, data?: Record<string, any>) {
   if (sseClients.size === 0) return;
-  const payload = JSON.stringify({ type, timestamp: Date.now(), ...(meta || {}), ...(data ? { data } : {}) });
+  // Embed data inline so receiving clients can apply it without an extra /api/sync round-trip
+  const payload = JSON.stringify({
+    type,
+    timestamp: Date.now(),
+    ...(meta || {}),
+    ...(data && Object.keys(data).length > 0 ? { data } : {}),
+  });
   const frame = `data: ${payload}\n\n`;
   for (const client of Array.from(sseClients)) {
     try {
@@ -370,6 +376,34 @@ function broadcastRealtime(type: string, meta?: Record<string, any>, data?: Reco
       sseClients.delete(client);
     }
   }
+}
+
+/** Helper: build scoped full-db broadcast payload */
+function buildBroadcastData(db: DatabaseSchema, opts: {
+  includeEvents?: boolean;
+  includeAllTickets?: boolean;
+  includedTickets?: any[];
+  eventId?: string;
+  deletedEventId?: string;
+  deletedTicketId?: string;
+}): Record<string, any> {
+  const d: Record<string, any> = {};
+  if (opts.includeEvents) {
+    d.events = db.events.filter((e: any) => e.status !== 'draft');
+  }
+  if (opts.deletedEventId) {
+    d.deletedEventId = opts.deletedEventId;
+  }
+  if (opts.deletedTicketId) {
+    d.deletedTicketId = opts.deletedTicketId;
+  }
+  if (opts.includeAllTickets && opts.eventId) {
+    d.tickets = db.tickets.filter((t: any) => t.eventId === opts.eventId);
+  }
+  if (opts.includedTickets) {
+    d.tickets = opts.includedTickets;
+  }
+  return d;
 }
 
 async function hydrateDbFromPostgres(db: DatabaseSchema): Promise<boolean> {
@@ -858,7 +892,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
           if (PostgresService.getConnected()) {
             await PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres gatePin update error:', e));
           }
-          broadcastRealtime('events', { eventId });
+          broadcastRealtime('events', { eventId }, buildBroadcastData(db, { includeEvents: true }));
           return sendJson(res, 200, { success: true, gatePin: nextPin, event: db.events[idx] });
         }
 
@@ -911,7 +945,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               await PostgresService.deleteEvent(eventId).catch((e: any) => console.warn('Postgres event delete error:', e));
             }
-            broadcastRealtime('events', { eventId });
+            broadcastRealtime('events', { eventId }, buildBroadcastData(db, { includeEvents: true, deletedEventId: eventId }));
             return sendJson(res, 200, { success: true });
           }
         }
@@ -1019,7 +1053,8 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
             await PostgresService.upsertTicket(ticket).catch(() => {});
           }
 
-          broadcastRealtime('tickets', { ticketId: ticket.ticketId, eventId: ticket.eventId });
+          broadcastRealtime('tickets', { ticketId: ticket.ticketId, eventId: ticket.eventId },
+            buildBroadcastData(db, { includeAllTickets: true, eventId: ticket.eventId }));
           return sendJson(res, 200, {
             success: true,
             message: `ENTRY GRANTED! Welcome ${ticket.userName}. Pass verified successfully.`,
@@ -1133,7 +1168,9 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               await PostgresService.upsertTicket(db.tickets[idx]).catch((e: any) => console.warn('Postgres ticket update error:', e));
             }
-            broadcastRealtime('tickets', { ticketId, eventId: currentTicket.eventId });
+            // Broadcast with updated ticket + all tickets for this event so host dashboard refreshes instantly
+            broadcastRealtime('tickets', { ticketId, eventId: currentTicket.eventId },
+              buildBroadcastData(db, { includeAllTickets: true, eventId: currentTicket.eventId, includedTickets: db.tickets.filter((t: any) => t.eventId === currentTicket.eventId) }));
             return sendJson(res, 200, { success: true, ticket: db.tickets[idx] });
           }
         }
@@ -2063,7 +2100,8 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
                 console.warn('Postgres payment sync error:', e)
               );
             }
-            broadcastRealtime('payments', { paymentId, eventId: paymentRecord.eventId, hostId: resolvedHostId });
+            broadcastRealtime('payments', { paymentId, eventId: paymentRecord.eventId, hostId: resolvedHostId },
+              buildBroadcastData(db, { includeAllTickets: true, eventId: paymentRecord.eventId, includedTickets: db.tickets.filter((t: any) => t.eventId === paymentRecord.eventId) }));
 
             return sendJson(res, 200, {
               success: true,

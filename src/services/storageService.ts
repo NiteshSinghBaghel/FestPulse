@@ -353,10 +353,22 @@ export class StorageService {
     let unsubTickets: (() => void) | null = null;
     let unsubPayouts: (() => void) | null = null;
 
+    let syncPending = false;
     const triggerSync = () => {
       if (disposed) return;
+      if (this.isSyncing) {
+        // Mark that another sync is needed after this one finishes
+        syncPending = true;
+        return;
+      }
       this.syncFromCloud(session).then(() => {
-        if (!disposed) onDataChanged();
+        if (!disposed) {
+          onDataChanged();
+          if (syncPending) {
+            syncPending = false;
+            triggerSync();
+          }
+        }
       });
     };
 
@@ -385,8 +397,23 @@ export class StorageService {
             // If the SSE message carries inline data, apply it directly — no extra /api/sync round-trip
             if (msg.data) {
               let changed = false;
+
+              // Handle deleted events
+              if (msg.data.deletedEventId) {
+                const current = this.getEvents();
+                this.saveEvents(current.filter(e => e.eventId !== msg.data.deletedEventId), false);
+                changed = true;
+              }
+
+              // Handle deleted tickets
+              if (msg.data.deletedTicketId) {
+                const current = this.getTickets();
+                this.saveTickets(current.filter(t => t.ticketId !== msg.data.deletedTicketId), false);
+                changed = true;
+              }
+
+              // Handle updated/new events list
               if (Array.isArray(msg.data.events)) {
-                // Merge server events with local: server wins for matching eventId
                 const local = this.getEvents();
                 const map = new Map<string, CollegeEvent>();
                 local.forEach(e => { if (e?.eventId) map.set(e.eventId, e); });
@@ -394,6 +421,8 @@ export class StorageService {
                 this.saveEvents(Array.from(map.values()), false);
                 changed = true;
               }
+
+              // Handle updated/new tickets (merge new tickets in, update existing ones)
               if (Array.isArray(msg.data.tickets)) {
                 const local = this.getTickets();
                 const map = new Map<string, Ticket>();
@@ -402,10 +431,15 @@ export class StorageService {
                 this.saveTickets(Array.from(map.values()), false);
                 changed = true;
               }
+
               if (changed) {
                 window.dispatchEvent(new Event('campuspass_data_updated'));
                 onDataChanged();
-                return; // skip full syncFromCloud
+                // Also kick a background sync to ensure we have full scoped data (non-blocking)
+                setTimeout(() => {
+                  if (!disposed) this.syncFromCloud(session).then(() => { if (!disposed) onDataChanged(); });
+                }, 500);
+                return; // skip immediate full syncFromCloud
               }
             }
 
