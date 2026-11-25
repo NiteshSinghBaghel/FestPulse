@@ -279,6 +279,30 @@ export class StorageService {
         );
         this.saveTickets(sortedTickets, false);
 
+        // Ensure events in local cache reconcile with confirmed tickets so count never reverts
+        const confirmedTicketCounts = new Map<string, number>();
+        sortedTickets.forEach(t => {
+          if (t?.eventId && t.status === 'confirmed') {
+            const qty = Math.max(1, Number(t.quantity) || 1);
+            confirmedTicketCounts.set(t.eventId, (confirmedTicketCounts.get(t.eventId) || 0) + qty);
+          }
+        });
+        let eventsNeedReSave = false;
+        eventMap.forEach((evt) => {
+          const confirmedQty = confirmedTicketCounts.get(evt.eventId) || 0;
+          if (confirmedQty > (evt.ticketsSold || 0)) {
+            evt.ticketsSold = confirmedQty;
+            evt.availableTickets = Math.max(0, (evt.capacity || 0) - confirmedQty);
+            if (evt.capacity && confirmedQty >= evt.capacity) {
+              evt.status = 'sold_out';
+            }
+            eventsNeedReSave = true;
+          }
+        });
+        if (eventsNeedReSave) {
+          this.saveEvents(Array.from(eventMap.values()), false);
+        }
+
         if (activeRole === 'host') {
           const currentPayouts = this.getPayouts(activeUid);
           const payoutMap = new Map<string, PayoutRecord>();
@@ -431,8 +455,26 @@ export class StorageService {
                 const map = new Map<string, Ticket>();
                 local.forEach(t => { if (t?.ticketId) map.set(t.ticketId, t); });
                 (msg.data.tickets as Ticket[]).forEach(t => { if (t?.ticketId) map.set(t.ticketId, t); });
-                this.saveTickets(Array.from(map.values()), false);
+                const allTickets = Array.from(map.values());
+                this.saveTickets(allTickets, false);
                 changed = true;
+
+                // Immediately reconcile event ticketsSold locally
+                const localEvents = this.getEvents();
+                let evtsChanged = false;
+                localEvents.forEach(evt => {
+                  const confirmedQty = allTickets
+                    .filter(t => t.eventId === evt.eventId && t.status === 'confirmed')
+                    .reduce((sum, t) => sum + Math.max(1, Number(t.quantity) || 1), 0);
+                  if (confirmedQty > (evt.ticketsSold || 0)) {
+                    evt.ticketsSold = confirmedQty;
+                    evt.availableTickets = Math.max(0, (evt.capacity || 0) - confirmedQty);
+                    evtsChanged = true;
+                  }
+                });
+                if (evtsChanged) {
+                  this.saveEvents(localEvents, false);
+                }
               }
 
               if (changed) {
@@ -596,11 +638,32 @@ export class StorageService {
     if (!organizerId && !organizerEmail) return [];
     const cleanId = organizerId ? organizerId.trim() : '';
     const cleanEmail = organizerEmail ? organizerEmail.toLowerCase().trim() : '';
-    return this.getEvents().filter(e => {
-      if (cleanId && e.hostId === cleanId) return true;
-      if (cleanEmail && e.hostEmail && e.hostEmail.toLowerCase().trim() === cleanEmail) return true;
-      return false;
+    const hostTickets = this.getHostTickets(cleanId, cleanEmail);
+    const confirmedCountMap = new Map<string, number>();
+    hostTickets.forEach(t => {
+      if (t?.eventId && t.status === 'confirmed') {
+        const qty = Math.max(1, Number(t.quantity) || 1);
+        confirmedCountMap.set(t.eventId, (confirmedCountMap.get(t.eventId) || 0) + qty);
+      }
     });
+
+    return this.getEvents()
+      .filter(e => {
+        if (cleanId && e.hostId === cleanId) return true;
+        if (cleanEmail && e.hostEmail && e.hostEmail.toLowerCase().trim() === cleanEmail) return true;
+        return false;
+      })
+      .map(e => {
+        const confirmedQty = confirmedCountMap.get(e.eventId) || 0;
+        const effectiveSold = Math.max(Number(e.ticketsSold) || 0, confirmedQty);
+        const cap = Number(e.capacity) || 0;
+        return {
+          ...e,
+          ticketsSold: effectiveSold,
+          availableTickets: Math.max(0, cap - effectiveSold),
+          status: cap > 0 && effectiveSold >= cap ? ('sold_out' as const) : e.status,
+        };
+      });
   }
 
   static createEvent(eventData: Omit<CollegeEvent, 'eventId' | 'createdAt' | 'updatedAt' | 'ticketsSold' | 'availableTickets'>): CollegeEvent {
@@ -976,11 +1039,15 @@ export class StorageService {
     const hostPayouts = this.getPayouts(cleanId, cleanEmail);
 
     const totalEvents = hostEvents.length;
-    const totalTicketsSold = hostEvents.reduce((acc, e) => acc + (e.ticketsSold || 0), 0);
+    const confirmedTicketsSum = hostTickets
+      .filter(t => t.status === 'confirmed')
+      .reduce((acc, t) => acc + Math.max(1, Number(t.quantity) || 1), 0);
+    const eventsSoldSum = hostEvents.reduce((acc, e) => acc + (Number(e.ticketsSold) || 0), 0);
+    const totalTicketsSold = Math.max(confirmedTicketsSum, eventsSoldSum);
 
     const ticketsRevenue = hostTickets
       .filter(t => t.status === 'confirmed')
-      .reduce((acc, t) => acc + (t.amount || 0), 0);
+      .reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
 
     const eventsRevenue = hostEvents.reduce(
       (acc, e) => acc + ((e.ticketsSold || 0) * (e.price || 0)),

@@ -226,7 +226,31 @@ function sanitizeAccount(account: any) {
   return safe;
 }
 
+function reconcileEventTicketsSold(db: DatabaseSchema) {
+  if (!Array.isArray(db.events) || !Array.isArray(db.tickets)) return;
+  const ticketCounts = new Map<string, number>();
+  for (const t of db.tickets) {
+    if (t?.eventId && t?.status === 'confirmed') {
+      const q = Math.max(1, Number(t.quantity) || 1);
+      ticketCounts.set(t.eventId, (ticketCounts.get(t.eventId) || 0) + q);
+    }
+  }
+  for (const evt of db.events) {
+    if (!evt?.eventId) continue;
+    const confirmedCount = ticketCounts.get(evt.eventId) || 0;
+    const currentSold = Number(evt.ticketsSold) || 0;
+    const effectiveSold = Math.max(currentSold, confirmedCount);
+    evt.ticketsSold = effectiveSold;
+    const cap = Number(evt.capacity) || 0;
+    evt.availableTickets = Math.max(0, cap - effectiveSold);
+    if (cap > 0 && effectiveSold >= cap) {
+      evt.status = 'sold_out';
+    }
+  }
+}
+
 function computeServerHostRevenue(db: DatabaseSchema, hostId?: string, hostEmail?: string) {
+  reconcileEventTicketsSold(db);
   const cleanId = (hostId || '').trim();
   const cleanEmail = (hostEmail || '').toLowerCase().trim();
   if (!cleanId && !cleanEmail) {
@@ -508,6 +532,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
           db.passwordResetTokens = remoteSnapshot.passwordResetTokens || db.passwordResetTokens;
           db.hostPayoutProfiles = remoteSnapshot.hostPayoutProfiles || db.hostPayoutProfiles;
           db.supabaseConfig = remoteSnapshot.supabaseConfig || db.supabaseConfig;
+          reconcileEventTicketsSold(db);
         } else {
           await MongoDbService.saveSnapshot(db);
         }
@@ -633,6 +658,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
 
         // 2. Scoped synchronization: Return ONLY data permitted for the signed-in user/role
         if ((url === '/api/sync' || url.startsWith('/api/sync?')) && req.method === 'GET') {
+          reconcileEventTicketsSold(db);
           // Hydrate from Postgres only if already connected AND not yet done this server lifecycle
           if (PostgresService.getConnected() && !hasHydratedFromPostgres) {
             await hydrateDbFromPostgres(db);
@@ -809,6 +835,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
         // 3. Events endpoints
         if (url === '/api/events' || url.startsWith('/api/events?')) {
           if (req.method === 'GET') {
+            reconcileEventTicketsSold(db);
             const parsed = new URL(url, 'http://localhost');
             const hostId = (parsed.searchParams.get('hostId') || '').trim();
             const hostEmail = (parsed.searchParams.get('hostEmail') || '').toLowerCase().trim();
@@ -1112,10 +1139,39 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
               db.tickets.unshift(newTicket);
             }
             const savedTicket = existingIdx >= 0 ? db.tickets[existingIdx] : newTicket;
+
+            // *** CRITICAL: Recalculate event.ticketsSold from actual confirmed tickets ***
+            // The client updates localStorage optimistically — but server must stay authoritative.
+            // Without this, /api/sync returns stale ticketsSold and overwrites the correct count.
+            if (savedTicket.eventId) {
+              const evtIdx = db.events.findIndex((e: any) => e.eventId === savedTicket.eventId);
+              if (evtIdx >= 0) {
+                const confirmedQty = db.tickets
+                  .filter((t: any) => t.eventId === savedTicket.eventId && t.status === 'confirmed')
+                  .reduce((sum: number, t: any) => sum + Math.max(1, Number(t.quantity) || 1), 0);
+                const capacity = Number(db.events[evtIdx].capacity) || 0;
+                const wasSoldOut = db.events[evtIdx].status === 'sold_out';
+                db.events[evtIdx] = {
+                  ...db.events[evtIdx],
+                  ticketsSold: confirmedQty,
+                  availableTickets: Math.max(0, capacity - confirmedQty),
+                  status: capacity > 0 && confirmedQty >= capacity
+                    ? 'sold_out'
+                    : (wasSoldOut ? 'published' : db.events[evtIdx].status),
+                  updatedAt: new Date().toISOString(),
+                };
+                if (PostgresService.getConnected()) {
+                  await PostgresService.upsertEvent(db.events[evtIdx]).catch((e: any) =>
+                    console.warn('Postgres event ticketsSold update error:', e));
+                }
+              }
+            }
+
             saveDatabase(db);
             if (PostgresService.getConnected()) {
               await PostgresService.upsertTicket(savedTicket).catch((e: any) => console.warn('Postgres ticket sync error:', e));
             }
+            // Broadcast with updated ticket AND event (now has correct ticketsSold)
             broadcastRealtime('tickets', { ticketId: savedTicket.ticketId, eventId: savedTicket.eventId }, {
               tickets: [savedTicket],
               events: db.events.filter((e: any) => e.eventId === savedTicket.eventId),
@@ -2091,6 +2147,25 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
               db.payments = [];
             }
             db.payments.push(paymentRecord);
+
+            // Recalculate event.ticketsSold from confirmed tickets now that payment is captured
+            if (paymentRecord.eventId) {
+              const evtIdx = db.events.findIndex((e: any) => e.eventId === paymentRecord.eventId);
+              if (evtIdx >= 0) {
+                const confirmedQty = db.tickets
+                  .filter((t: any) => t.eventId === paymentRecord.eventId && t.status === 'confirmed')
+                  .reduce((sum: number, t: any) => sum + Math.max(1, Number(t.quantity) || 1), 0);
+                const capacity = Number(db.events[evtIdx].capacity) || 0;
+                db.events[evtIdx] = {
+                  ...db.events[evtIdx],
+                  ticketsSold: confirmedQty,
+                  availableTickets: Math.max(0, capacity - confirmedQty),
+                  status: capacity > 0 && confirmedQty >= capacity ? 'sold_out' : db.events[evtIdx].status,
+                  updatedAt: new Date().toISOString(),
+                };
+              }
+            }
+
             saveDatabase(db);
             await MongoDbService.saveSnapshot(db).catch((e: any) =>
               console.warn('MongoDB payment sync error:', e)
@@ -2100,8 +2175,11 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
                 console.warn('Postgres payment sync error:', e)
               );
             }
-            broadcastRealtime('payments', { paymentId, eventId: paymentRecord.eventId, hostId: resolvedHostId },
-              buildBroadcastData(db, { includeAllTickets: true, eventId: paymentRecord.eventId, includedTickets: db.tickets.filter((t: any) => t.eventId === paymentRecord.eventId) }));
+            // Broadcast with updated tickets AND the event (now has correct ticketsSold)
+            broadcastRealtime('payments', { paymentId, eventId: paymentRecord.eventId, hostId: resolvedHostId }, {
+              tickets: db.tickets.filter((t: any) => t.eventId === paymentRecord.eventId),
+              events: db.events.filter((e: any) => e.eventId === paymentRecord.eventId),
+            });
 
             return sendJson(res, 200, {
               success: true,
