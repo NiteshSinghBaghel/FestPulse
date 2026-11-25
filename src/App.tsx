@@ -263,7 +263,7 @@ export const App: React.FC = () => {
       StorageService.syncFromCloud(session).then(() => {
         refreshData();
       });
-    }, 15000);
+    }, 5000);
 
     return () => {
       stopRealtime();

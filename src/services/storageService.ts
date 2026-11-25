@@ -379,10 +379,38 @@ export class StorageService {
         eventSource.onmessage = (evt) => {
           if (disposed) return;
           try {
-            const data = JSON.parse(evt.data || '{}');
-            if (data.type && data.type !== 'connected') {
-              triggerSync();
+            const msg = JSON.parse(evt.data || '{}');
+            if (!msg.type || msg.type === 'connected') return;
+
+            // If the SSE message carries inline data, apply it directly — no extra /api/sync round-trip
+            if (msg.data) {
+              let changed = false;
+              if (Array.isArray(msg.data.events)) {
+                // Merge server events with local: server wins for matching eventId
+                const local = this.getEvents();
+                const map = new Map<string, CollegeEvent>();
+                local.forEach(e => { if (e?.eventId) map.set(e.eventId, e); });
+                (msg.data.events as CollegeEvent[]).forEach(e => { if (e?.eventId) map.set(e.eventId, e); });
+                this.saveEvents(Array.from(map.values()), false);
+                changed = true;
+              }
+              if (Array.isArray(msg.data.tickets)) {
+                const local = this.getTickets();
+                const map = new Map<string, Ticket>();
+                local.forEach(t => { if (t?.ticketId) map.set(t.ticketId, t); });
+                (msg.data.tickets as Ticket[]).forEach(t => { if (t?.ticketId) map.set(t.ticketId, t); });
+                this.saveTickets(Array.from(map.values()), false);
+                changed = true;
+              }
+              if (changed) {
+                window.dispatchEvent(new Event('campuspass_data_updated'));
+                onDataChanged();
+                return; // skip full syncFromCloud
+              }
             }
+
+            // No inline data — fall back to full sync
+            triggerSync();
           } catch {}
         };
       }

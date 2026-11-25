@@ -355,9 +355,9 @@ function stripGatePinUnlessOwner(event: any, userId: string, userEmail: string) 
 
 const sseClients = new Set<any>();
 
-function broadcastRealtime(type: string, meta?: Record<string, any>) {
+function broadcastRealtime(type: string, meta?: Record<string, any>, data?: Record<string, any>) {
   if (sseClients.size === 0) return;
-  const payload = JSON.stringify({ type, timestamp: Date.now(), ...(meta || {}) });
+  const payload = JSON.stringify({ type, timestamp: Date.now(), ...(meta || {}), ...(data ? { data } : {}) });
   const frame = `data: ${payload}\n\n`;
   for (const client of Array.from(sseClients)) {
     try {
@@ -599,9 +599,10 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
 
         // 2. Scoped synchronization: Return ONLY data permitted for the signed-in user/role
         if ((url === '/api/sync' || url.startsWith('/api/sync?')) && req.method === 'GET') {
-          // If PostgreSQL is connected, hydrate latest state from PostgreSQL across all tables
-          if (PostgresService.getConnected()) {
+          // Hydrate from Postgres only if already connected AND not yet done this server lifecycle
+          if (PostgresService.getConnected() && !hasHydratedFromPostgres) {
             await hydrateDbFromPostgres(db);
+            hasHydratedFromPostgres = true;
           }
 
           const parsed = new URL(url, 'http://localhost');
@@ -822,7 +823,8 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               await PostgresService.upsertEvent(savedEvent).catch((e: any) => console.warn('Postgres event sync error:', e));
             }
-            broadcastRealtime('events', { eventId: savedEvent.eventId });
+            // Broadcast with the full updated events list so clients skip the extra /api/sync round-trip
+            broadcastRealtime('events', { eventId: savedEvent.eventId }, { events: db.events.filter((e: any) => e.status !== 'draft') });
             return sendJson(res, 200, { success: true, event: savedEvent });
           }
         }
@@ -888,7 +890,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               await PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres event update error:', e));
             }
-            broadcastRealtime('events', { eventId });
+            broadcastRealtime('events', { eventId }, { events: db.events.filter((e: any) => e.status !== 'draft') });
             return sendJson(res, 200, { success: true, event: db.events[idx] });
           }
           if (req.method === 'DELETE') {
@@ -1079,7 +1081,10 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
             if (PostgresService.getConnected()) {
               await PostgresService.upsertTicket(savedTicket).catch((e: any) => console.warn('Postgres ticket sync error:', e));
             }
-            broadcastRealtime('tickets', { ticketId: savedTicket.ticketId, eventId: savedTicket.eventId });
+            broadcastRealtime('tickets', { ticketId: savedTicket.ticketId, eventId: savedTicket.eventId }, {
+              tickets: [savedTicket],
+              events: db.events.filter((e: any) => e.eventId === savedTicket.eventId),
+            });
             return sendJson(res, 200, { success: true, ticket: savedTicket });
           }
         }
