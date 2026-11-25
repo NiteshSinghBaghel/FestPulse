@@ -116,6 +116,7 @@ function getConfiguredDatabaseUrl(): string {
 
 let manuallyDisconnectedPostgres = false;
 let hasHydratedFromPostgres = false;
+let hasHydratedFromMongo = false;
 
 function getLocalDbFilePath(): string {
   const dir = path.resolve(process.cwd(), '.data');
@@ -460,7 +461,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
     const db = getSharedDatabase();
 
     // MongoDB Atlas is the cloud persistence source when MONGODB_URI is configured.
-    if (MongoDbService.getUri()) {
+    if (MongoDbService.getUri() && !hasHydratedFromMongo) {
       const mongoConnected = await MongoDbService.ensureConnected();
       if (mongoConnected) {
         const remoteSnapshot = await MongoDbService.hydrateAll();
@@ -476,6 +477,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
         } else {
           await MongoDbService.saveSnapshot(db);
         }
+        hasHydratedFromMongo = true;
       }
     }
 
