@@ -72,7 +72,7 @@ interface DatabaseSchema {
 
 function readEnvRazorpayConfig(): RazorpayConfigSchema {
   const keyId = getEnvKey('RAZORPAY_KEY_ID', '') || getEnvKey('VITE_RAZORPAY_KEY_ID', '');
-  const keySecret = getEnvKey('RAZORPAY_KEY_SECRET', '') || getEnvKey('VITE_RAZORPAY_KEY_SECRET', '');
+  const keySecret = getEnvKey('RAZORPAY_KEY_SECRET', '');
   const rawAccount = getEnvKey('RAZORPAY_ACCOUNT_NUMBER', '');
   const webhookSecret = getEnvKey('RAZORPAY_WEBHOOK_SECRET', '');
   return {
@@ -167,7 +167,7 @@ function sendJson(res: any, statusCode: number, data: any) {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Razorpay-Signature');
   res.end(JSON.stringify(data));
 }
 
@@ -1916,6 +1916,38 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
               });
             }
 
+            // Verify the order amount/currency server-side too. The checkout signature
+            // only proves order_id|payment_id ownership; it does not authorize a ticket
+            // quantity or event price.
+            const rzpOrderRes = await fetch(`https://api.razorpay.com/v1/orders/${encodeURIComponent(orderId)}`, {
+              headers: { Authorization: `Basic ${basicAuth}` },
+            });
+
+            if (!rzpOrderRes.ok) {
+              const errBody: any = await rzpOrderRes.json().catch(() => ({}));
+              return sendJson(res, 400, {
+                success: false,
+                verified: false,
+                error: errBody?.error?.description || 'Could not confirm the Razorpay order.',
+              });
+            }
+
+            const rzpOrder: any = await rzpOrderRes.json();
+            if (Number(rzpPayment.amount) !== Number(rzpOrder.amount)) {
+              return sendJson(res, 400, {
+                success: false,
+                verified: false,
+                error: 'Payment amount does not match the Razorpay order amount.',
+              });
+            }
+            if (String(rzpPayment.currency || rzpOrder.currency || 'INR').toUpperCase() !== String(rzpOrder.currency || 'INR').toUpperCase()) {
+              return sendJson(res, 400, {
+                success: false,
+                verified: false,
+                error: 'Payment currency does not match the Razorpay order currency.',
+              });
+            }
+
             // If authorized but not yet captured, capture via Razorpay API
             let finalPaymentStatus = rzpPayment.status;
             if (finalPaymentStatus === 'authorized') {
@@ -1973,6 +2005,9 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
             }
             db.payments.push(paymentRecord);
             saveDatabase(db);
+            await MongoDbService.saveSnapshot(db).catch((e: any) =>
+              console.warn('MongoDB payment sync error:', e)
+            );
             if (PostgresService.getConnected()) {
               await PostgresService.upsertPayment(paymentRecord).catch((e: any) =>
                 console.warn('Postgres payment sync error:', e)
@@ -2241,6 +2276,9 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
                 };
                 db.payments.push(webhookPayment);
                 saveDatabase(db);
+                await MongoDbService.saveSnapshot(db).catch((e: any) =>
+                  console.warn('MongoDB webhook payment sync error:', e)
+                );
                 if (PostgresService.getConnected()) {
                   await PostgresService.upsertPayment(webhookPayment).catch((e: any) =>
                     console.warn('Postgres webhook payment sync error:', e)
