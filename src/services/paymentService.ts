@@ -159,6 +159,7 @@ export class PaymentService {
     amountInRupees: number;
     eventName: string;
     eventId: string;
+    eventImage?: string;
     studentName: string;
     studentEmail: string;
     studentPhone: string;
@@ -187,13 +188,14 @@ export class PaymentService {
     const cleanPhone = params.studentPhone ? params.studentPhone.replace(/\D/g, '').slice(-10) : '';
     let didFail = false;
 
-    const options = {
+    const options: any = {
       key: activeKeyId,
       amount: amountInPaise,
       currency: 'INR',
-      name: RAZORPAY_CONFIG.merchantName,
-      description: `Pass for ${params.eventName}`.substring(0, 60),
+      name: (params.eventName || RAZORPAY_CONFIG.merchantName).substring(0, 45),
+      description: `Pass for ${params.eventName} (${params.quantity} ${params.quantity > 1 ? 'tickets' : 'ticket'})`.substring(0, 60),
       order_id: params.orderId,
+      ...(params.eventImage ? { image: params.eventImage } : {}),
       handler: function (response: any) {
         if (!response?.razorpay_payment_id || !response?.razorpay_signature) {
           didFail = true;

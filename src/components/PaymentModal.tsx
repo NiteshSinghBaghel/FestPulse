@@ -220,6 +220,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({ event, isOpen, onClo
         amountInRupees: order.amount,
         eventName: event.title,
         eventId: event.eventId,
+        eventImage: event.imageUrl && event.imageUrl.startsWith('http') ? event.imageUrl : undefined,
         studentName: fullName.trim(),
         studentEmail: email.trim(),
         studentPhone: phone.trim(),

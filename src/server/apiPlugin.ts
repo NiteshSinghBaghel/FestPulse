@@ -117,9 +117,21 @@ function getConfiguredDatabaseUrl(): string {
 let manuallyDisconnectedPostgres = false;
 let hasHydratedFromPostgres = false;
 
+function getLocalDbFilePath(): string {
+  const dir = path.resolve(process.cwd(), '.data');
+  if (!fs.existsSync(dir)) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {}
+  }
+  return path.join(dir, 'local_db.json');
+}
+
+let sharedDb: DatabaseSchema | null = null;
+
 function loadDatabase(): DatabaseSchema {
   const defaultRzpConfig = readEnvRazorpayConfig();
-  return {
+  const base: DatabaseSchema = {
     events: [],
     tickets: [],
     accounts: [],
@@ -131,9 +143,48 @@ function loadDatabase(): DatabaseSchema {
     passwordResetTokens: {},
     hostPayoutProfiles: {},
   };
+
+  try {
+    const filePath = getLocalDbFilePath();
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const parsed = JSON.parse(content);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          ...base,
+          ...parsed,
+          events: Array.isArray(parsed.events) ? parsed.events : [],
+          tickets: Array.isArray(parsed.tickets) ? parsed.tickets : [],
+          accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
+          payouts: Array.isArray(parsed.payouts) ? parsed.payouts : [],
+          payments: Array.isArray(parsed.payments) ? parsed.payments : [],
+          razorpayConfig: parsed.razorpayConfig || defaultRzpConfig,
+          passwordResetTokens: parsed.passwordResetTokens || {},
+          hostPayoutProfiles: parsed.hostPayoutProfiles || {},
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[Local DB] Error loading database from file:', err);
+  }
+
+  return base;
+}
+
+function getSharedDatabase(): DatabaseSchema {
+  if (!sharedDb) {
+    sharedDb = loadDatabase();
+  }
+  return sharedDb;
 }
 
 function saveDatabase(data: DatabaseSchema): boolean {
+  try {
+    const filePath = getLocalDbFilePath();
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[Local DB] Error saving database to file:', err);
+  }
   void MongoDbService.saveSnapshot(data);
   return true;
 }
@@ -406,7 +457,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
   }
 
   try {
-    const db = loadDatabase();
+    const db = getSharedDatabase();
 
     // MongoDB Atlas is the cloud persistence source when MONGODB_URI is configured.
     if (MongoDbService.getUri()) {
