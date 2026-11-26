@@ -130,6 +130,10 @@ function getLocalDbFilePath(): string {
 
 let sharedDb: DatabaseSchema | null = null;
 
+function isCloudDatabaseConfigured(): boolean {
+  return Boolean(MongoDbService.getUri() || getConfiguredDatabaseUrl());
+}
+
 function loadDatabase(): DatabaseSchema {
   const defaultRzpConfig = readEnvRazorpayConfig();
   const base: DatabaseSchema = {
@@ -144,6 +148,11 @@ function loadDatabase(): DatabaseSchema {
     passwordResetTokens: {},
     hostPayoutProfiles: {},
   };
+
+  // When a cloud database (MongoDB / PostgreSQL) is configured, never load stale data from local_db.json
+  if (isCloudDatabaseConfigured()) {
+    return base;
+  }
 
   try {
     const filePath = getLocalDbFilePath();
@@ -180,13 +189,16 @@ function getSharedDatabase(): DatabaseSchema {
 }
 
 function saveDatabase(data: DatabaseSchema): boolean {
+  if (isCloudDatabaseConfigured()) {
+    void MongoDbService.saveSnapshot(data);
+    return true;
+  }
   try {
     const filePath = getLocalDbFilePath();
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
   } catch (err) {
     console.warn('[Local DB] Error saving database to file:', err);
   }
-  void MongoDbService.saveSnapshot(data);
   return true;
 }
 
