@@ -100,7 +100,7 @@ export class PostgresService {
   private static lastAutoConnectError = '';
 
   static getConnected(): boolean {
-    return this.isConnected && this.pool !== null;
+    return false;
   }
 
   static getLastError(): string {

@@ -553,24 +553,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
       }
     }
 
-    // Auto-connect permanent PostgreSQL database when DATABASE_URL / POSTGRES_URL is configured
-    if (!manuallyDisconnectedPostgres) {
-      const configuredPgUrl = getConfiguredDatabaseUrl();
-      if (configuredPgUrl) {
-        const connected = await PostgresService.ensureAutoConnected(configuredPgUrl, {
-          events: db.events,
-          tickets: db.tickets,
-          accounts: db.accounts,
-          payouts: db.payouts,
-          payments: db.payments,
-          hostPayoutProfiles: db.hostPayoutProfiles,
-        });
-        if (connected && !hasHydratedFromPostgres) {
-          await hydrateDbFromPostgres(db);
-          hasHydratedFromPostgres = true;
-        }
-      }
-    }
+    // PostgreSQL disabled: MongoDB Atlas is the sole database source.
 
           // 1. Health check
         if (url === '/api/health' && req.method === 'GET') {
