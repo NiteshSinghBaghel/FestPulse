@@ -13,9 +13,9 @@ export const DigitalTicket: React.FC<DigitalTicketProps> = ({ ticket, onClose })
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [copied, setCopied] = React.useState(false);
 
-  // Retrieve event to get latest host helpline if not on ticket
+  // Retrieve event to always show the latest live host helpline on the student pass
   const event = StorageService.getEventById(ticket.eventId);
-  const organizerPhone = ticket.hostPhone || event?.hostPhone || '';
+  const organizerPhone = event?.hostPhone || ticket.hostPhone || '';
   const organizerName = event?.hostName || 'Event Organizer';
 
   useEffect(() => {

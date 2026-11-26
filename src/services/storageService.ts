@@ -1094,12 +1094,14 @@ export class StorageService {
       if (cleaned.length !== parsed.length) {
         this.saveTickets(cleaned);
       }
-      // Ensure hostPhone is populated from events if missing
+      // Always keep hostPhone synced with the latest event helpline
       const events = this.getEvents();
       return cleaned.map(t => {
-        if (!t.hostPhone) {
-          const ev = events.find(e => e.eventId === t.eventId);
-          t.hostPhone = ev?.hostPhone || '';
+        const ev = events.find(e => e.eventId === t.eventId);
+        if (ev?.hostPhone) {
+          t.hostPhone = ev.hostPhone;
+        } else if (!t.hostPhone) {
+          t.hostPhone = '';
         }
         return t;
       });
@@ -1153,7 +1155,7 @@ export class StorageService {
   }
 
   static updateEventHostHelpline(eventId: string, hostPhone: string): void {
-    this.updateEvent(eventId, { hostPhone });
+    void this.updateEventAsync(eventId, { hostPhone }).catch(() => {});
     const tickets = this.getTickets();
     let changed = false;
     tickets.forEach(t => {

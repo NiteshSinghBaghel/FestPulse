@@ -999,11 +999,33 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
               mergedEvent.status = 'published';
             }
             db.events[idx] = mergedEvent;
+
+            // Propagate updated hostPhone live to all tickets of this event
+            let updatedEventTickets: any[] = [];
+            if (updates.hostPhone !== undefined && Array.isArray(db.tickets)) {
+              for (const t of db.tickets) {
+                if (t.eventId === eventId) {
+                  t.hostPhone = mergedEvent.hostPhone || '';
+                  updatedEventTickets.push(t);
+                }
+              }
+            }
+
             saveDatabase(db);
             if (PostgresService.getConnected()) {
               await PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres event update error:', e));
+              for (const t of updatedEventTickets) {
+                await PostgresService.upsertTicket(t).catch(() => {});
+              }
             }
-            broadcastRealtime('events', { eventId }, buildBroadcastData(db, { includeEvents: true }));
+            broadcastRealtime(
+              'events',
+              { eventId },
+              buildBroadcastData(db, {
+                includeEvents: true,
+                includedTickets: updatedEventTickets.length > 0 ? updatedEventTickets : undefined,
+              })
+            );
             return sendJson(res, 200, { success: true, event: db.events[idx] });
           }
           if (req.method === 'DELETE') {
@@ -1392,12 +1414,29 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
               }
             }
 
-            // Keep host events synced if organizer details changed
+            // Keep host events & their tickets synced if organizer details changed
+            const syncedHostEventIds = new Set<string>();
             if (Array.isArray(db.events)) {
               for (const e of db.events) {
-                if (e.hostId === savedAccount.uid) {
+                const isHostEvent = Boolean(
+                  (savedAccount.uid && e.hostId === savedAccount.uid) ||
+                  (cleanEmail && e.hostEmail && String(e.hostEmail).toLowerCase().trim() === cleanEmail)
+                );
+                if (isHostEvent) {
                   if (savedAccount.name) e.hostName = savedAccount.name;
                   if (savedAccount.phone) e.hostPhone = savedAccount.phone;
+                  e.updatedAt = new Date().toISOString();
+                  syncedHostEventIds.add(e.eventId);
+                }
+              }
+            }
+
+            const syncedHostTickets: any[] = [];
+            if (savedAccount.phone && syncedHostEventIds.size > 0 && Array.isArray(db.tickets)) {
+              for (const t of db.tickets) {
+                if (syncedHostEventIds.has(t.eventId)) {
+                  t.hostPhone = savedAccount.phone;
+                  syncedHostTickets.push(t);
                 }
               }
             }
@@ -1408,8 +1447,21 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
                 await PostgresService.deleteAccount(cleanOldEmail).catch((e: any) => console.warn('Postgres delete old account error:', e));
               }
               await PostgresService.upsertAccount(savedAccount).catch((e: any) => console.warn('Postgres account sync error:', e));
+              for (const t of syncedHostTickets) {
+                await PostgresService.upsertTicket(t).catch(() => {});
+              }
             }
             broadcastRealtime('accounts', { uid: savedAccount.uid });
+            if (syncedHostEventIds.size > 0) {
+              broadcastRealtime(
+                'events',
+                { uid: savedAccount.uid },
+                buildBroadcastData(db, {
+                  includeEvents: true,
+                  includedTickets: syncedHostTickets.length > 0 ? syncedHostTickets : undefined,
+                })
+              );
+            }
             return sendJson(res, 200, { success: true, account: sanitizeAccount(savedAccount) });
           }
         }
