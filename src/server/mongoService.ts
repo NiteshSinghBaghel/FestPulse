@@ -57,7 +57,16 @@ export class MongoDbService {
       if (this.client) {
         await this.disconnect();
       }
-      const client = new MongoClient(connectionUri, { serverSelectionTimeoutMS: 10000 });
+      const client = new MongoClient(connectionUri, {
+        serverSelectionTimeoutMS: 15000,
+        connectTimeoutMS: 15000,
+        socketTimeoutMS: 30000,
+        tls: true,
+        tlsAllowInvalidCertificates: true,
+        tlsAllowInvalidHostnames: true,
+        retryWrites: true,
+        retryReads: true,
+      });
       await client.connect();
       await client.db(this.getDatabaseName()).command({ ping: 1 });
       this.client = client;
