@@ -34,6 +34,8 @@ export class MongoDbService {
   private static client: MongoClient | null = null;
   private static db: Db | null = null;
   private static connected = false;
+  private static lastFailureAt = 0;
+  private static connectInFlight: Promise<boolean> | null = null;
 
   static getConnected(): boolean {
     return this.connected && this.client !== null && this.db !== null;
@@ -58,9 +60,9 @@ export class MongoDbService {
         await this.disconnect();
       }
       const client = new MongoClient(connectionUri, {
-        serverSelectionTimeoutMS: 15000,
-        connectTimeoutMS: 15000,
-        socketTimeoutMS: 30000,
+        serverSelectionTimeoutMS: 5000,
+        connectTimeoutMS: 5000,
+        socketTimeoutMS: 15000,
         tls: true,
         tlsAllowInvalidCertificates: true,
         tlsAllowInvalidHostnames: true,
@@ -94,8 +96,22 @@ export class MongoDbService {
 
   static async ensureConnected(): Promise<boolean> {
     if (this.getConnected()) return true;
-    const result = await this.connect();
-    return result.success;
+    // Cooldown for 30s after a failed connection attempt so API requests (e.g. gate scan) stay instant
+    if (this.lastFailureAt && Date.now() - this.lastFailureAt < 30000) {
+      return false;
+    }
+    if (this.connectInFlight) {
+      return this.connectInFlight;
+    }
+    this.connectInFlight = this.connect()
+      .then((result) => {
+        this.lastFailureAt = result.success ? 0 : Date.now();
+        return result.success;
+      })
+      .finally(() => {
+        this.connectInFlight = null;
+      });
+    return this.connectInFlight;
   }
 
   static async getStatus(): Promise<{ connected: boolean; database?: string; error?: string }> {

@@ -277,20 +277,27 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
       videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA
     ) {
       const video = videoRef.current;
+      const rawW = video.videoWidth || 640;
+      const rawH = video.videoHeight || 480;
+      // Downscale to max 480px width for instant jsQR decoding (~5-10ms per frame)
+      const scale = rawW > 480 ? 480 / rawW : 1;
+      const targetW = Math.max(1, Math.round(rawW * scale));
+      const targetH = Math.max(1, Math.round(rawH * scale));
+
       if (!canvasRef.current) {
         canvasRef.current = document.createElement('canvas');
       }
       const canvas = canvasRef.current;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      if (canvas.width !== targetW) canvas.width = targetW;
+      if (canvas.height !== targetH) canvas.height = targetH;
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
       if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, 0, 0, targetW, targetH);
+        const imageData = ctx.getImageData(0, 0, targetW, targetH);
         try {
           const code = jsQR(imageData.data, imageData.width, imageData.height, {
-            inversionAttempts: 'dontInvert',
+            inversionAttempts: 'attemptBoth',
           });
 
           if (code && code.data && code.data.trim()) {
@@ -308,7 +315,7 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
               }
               return;
             }
-            processToken(rawQr);
+            void processToken(rawQr);
             return;
           }
         } catch {
@@ -320,9 +327,28 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
     animationFrameRef.current = requestAnimationFrame(scanFrame);
   };
 
+  const resumeScanningNow = () => {
+    if (feedbackTimeoutRef.current) {
+      clearTimeout(feedbackTimeoutRef.current);
+      feedbackTimeoutRef.current = null;
+    }
+    setFeedbackState(null);
+    setActiveScannedTicket(null);
+    isScanningActiveRef.current = true;
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    animationFrameRef.current = requestAnimationFrame(scanFrame);
+  };
+
   // Process the QR token or ticket ID through server-verified volunteer gate logic
   const processToken = async (token: string) => {
     if (!token.trim() || !activeEvent) return;
+    if (feedbackTimeoutRef.current) {
+      clearTimeout(feedbackTimeoutRef.current);
+      feedbackTimeoutRef.current = null;
+    }
+    setFeedbackState(null);
     setIsProcessing(true);
 
     const activePin = activeEvent.gatePin || gatePinInput;
@@ -337,63 +363,47 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
       setLastScannedTicket(result.ticket);
     }
 
-    // Refresh event entries
-    await loadEventEntries(activeEvent.eventId, activePin);
-
     if (result.code === 'WRONG_HOST_OR_EVENT') {
       playSound('error');
       setFeedbackState('wrong_event');
       setActiveScannedTicket(result.ticket || null);
       setFeedbackMessage(result.message || 'Pass belongs to a different event! Gate entry denied.');
       isScanningActiveRef.current = false;
-      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
-      feedbackTimeoutRef.current = setTimeout(() => {
-        setFeedbackState(null);
-        isScanningActiveRef.current = true;
-        scanFrame();
-      }, 3500);
+      feedbackTimeoutRef.current = setTimeout(resumeScanningNow, 3500);
     } else if (result.code === 'ALREADY_ENTERED') {
       playSound('error');
       setFeedbackState('already_entered');
       setActiveScannedTicket(result.ticket || null);
-      setFeedbackMessage(result.message || 'Already entered earlier today! Duplicate check-in rejected.');
+      setFeedbackMessage(
+        result.ticket?.entryTime
+          ? `Already checked in at ${result.ticket.entryTime}! Duplicate entry rejected.`
+          : result.message || 'Already checked in earlier! Duplicate entry rejected.'
+      );
       isScanningActiveRef.current = false;
-      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
-      feedbackTimeoutRef.current = setTimeout(() => {
-        setFeedbackState(null);
-        isScanningActiveRef.current = true;
-        scanFrame();
-      }, 3500);
+      feedbackTimeoutRef.current = setTimeout(resumeScanningNow, 3500);
     } else if (result.success) {
       playSound('success');
       setFeedbackState('verified');
       setActiveScannedTicket(result.ticket || null);
-      setFeedbackMessage(`Entry Allowed • Welcome ${result.ticket?.userName || 'Attendee'}`);
+      setFeedbackMessage(`Scan Valid • Checked In! Welcome ${result.ticket?.userName || 'Attendee'}`);
       isScanningActiveRef.current = false;
 
       if (onScanSuccess) {
         onScanSuccess();
       }
 
-      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
-      feedbackTimeoutRef.current = setTimeout(() => {
-        setFeedbackState(null);
-        isScanningActiveRef.current = true;
-        scanFrame();
-      }, 3500);
+      feedbackTimeoutRef.current = setTimeout(resumeScanningNow, 3500);
     } else {
       playSound('error');
       setFeedbackState('invalid');
       setActiveScannedTicket(result.ticket || null);
       setFeedbackMessage(result.message || 'Invalid Ticket QR Token.');
       isScanningActiveRef.current = false;
-      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
-      feedbackTimeoutRef.current = setTimeout(() => {
-        setFeedbackState(null);
-        isScanningActiveRef.current = true;
-        scanFrame();
-      }, 3000);
+      feedbackTimeoutRef.current = setTimeout(resumeScanningNow, 3000);
     }
+
+    // Refresh event entries in background so feedback overlay displays instantaneously
+    void loadEventEntries(activeEvent.eventId, activePin);
   };
 
   const handleManualSubmit = (e: React.FormEvent) => {
@@ -634,7 +644,7 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
             </div>
 
             {/* Camera Viewport & Overlay */}
-            <div className="relative bg-black flex-1 min-h-[260px] max-h-[360px] flex items-center justify-center overflow-hidden">
+            <div className="relative bg-black flex-1 min-h-[300px] max-h-[380px] flex items-center justify-center overflow-hidden">
               <video
                 ref={videoRef}
                 className="w-full h-full object-cover"
@@ -688,10 +698,21 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
                 </div>
               )}
 
+              {/* Instant Scan Processing Overlay */}
+              {isProcessing && !feedbackState && (
+                <div className="absolute inset-0 z-30 flex flex-col items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm text-white">
+                  <RefreshCw className="w-10 h-10 text-amber-400 animate-spin mb-2" />
+                  <p className="text-sm font-black tracking-wide text-amber-300 uppercase">
+                    QR Scanned • Verifying Pass...
+                  </p>
+                  <p className="text-[11px] text-slate-300 mt-0.5">Checking ticket validity &amp; check-in status</p>
+                </div>
+              )}
+
               {/* ================= HIGH VISIBILITY FULL-VIEWPORT FEEDBACK OVERLAY ================= */}
               {feedbackState && (
                 <div
-                  className={`absolute inset-0 z-40 flex flex-col items-center justify-center p-6 text-center text-white backdrop-blur-md transition-all duration-200 ${
+                  className={`absolute inset-0 z-40 flex flex-col items-center justify-center p-4 sm:p-5 text-center text-white backdrop-blur-md transition-all duration-200 overflow-y-auto ${
                     feedbackState === 'verified'
                       ? 'bg-[#062916]/95 border-4 border-emerald-400'
                       : feedbackState === 'already_entered'
@@ -703,70 +724,72 @@ export const VolunteerGateScannerModal: React.FC<VolunteerGateScannerModalProps>
                 >
                   {feedbackState === 'verified' && (
                     <div className="w-full max-w-sm flex flex-col items-center">
-                      <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-4 border-emerald-400 text-emerald-400 flex items-center justify-center shadow-2xl mb-2 animate-bounce">
-                        <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+                      <div className="w-14 h-14 rounded-full bg-emerald-500/20 border-4 border-emerald-400 text-emerald-400 flex items-center justify-center shadow-2xl mb-1.5 animate-bounce">
+                        <CheckCircle2 className="w-8 h-8 text-emerald-400" />
                       </div>
 
-                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider mb-1.5 shadow-md">
+                      <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-emerald-400 text-slate-950 font-black text-[11px] uppercase tracking-wider mb-1 shadow-md">
                         <Users className="w-3.5 h-3.5 stroke-[2.5]" />
                         <span>ADMIT {activeScannedTicket?.quantity || 1} {(activeScannedTicket?.quantity || 1) > 1 ? 'VISITORS' : 'VISITOR'}</span>
                       </div>
 
-                      <h2 className="text-2xl font-black text-emerald-300 tracking-tight">
-                        ENTRY ALLOWED ✓
+                      <h2 className="text-xl sm:text-2xl font-black text-emerald-300 tracking-tight">
+                        VALID PASS • CHECKED IN ✓
                       </h2>
                       <p className="text-xs font-semibold text-emerald-100 mt-0.5">
-                        Pass Verified • Welcome to the Event!
+                        {feedbackMessage || 'Scan Valid! Pass Verified & Checked In.'}
                       </p>
 
                       {activeScannedTicket && (
-                        <div className="mt-3 px-4 py-2.5 rounded-2xl bg-black/60 border border-emerald-500/30 text-xs text-emerald-100 w-full text-left space-y-1">
+                        <div className="mt-2.5 px-3.5 py-2 rounded-2xl bg-black/60 border border-emerald-500/30 text-xs text-emerald-100 w-full text-left space-y-0.5">
                           <p className="truncate"><b>Attendee:</b> {activeScannedTicket.userName} {activeScannedTicket.rollNo ? `(${activeScannedTicket.rollNo})` : ''}</p>
                           <p className="font-mono text-[11px] text-emerald-300"><b>Pass ID:</b> {activeScannedTicket.ticketId}</p>
                           <p className="text-[11px] text-emerald-300"><b>Checked In:</b> {activeScannedTicket.entryTime || 'Just now'}</p>
                         </div>
                       )}
 
-                      <div className="mt-3 w-40 h-1.5 bg-emerald-950 rounded-full overflow-hidden">
-                        <div className="h-full bg-emerald-400 rounded-full animate-pulse" style={{ width: '100%' }} />
-                      </div>
-                      <span className="text-[10px] text-emerald-300 mt-1 font-medium">
-                        Ready for next attendee in 3.5s...
-                      </span>
+                      <button
+                        type="button"
+                        onClick={resumeScanningNow}
+                        className="mt-2.5 px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs transition cursor-pointer"
+                      >
+                        Scan Next Pass →
+                      </button>
                     </div>
                   )}
 
                   {feedbackState === 'already_entered' && (
                     <div className="w-full max-w-sm flex flex-col items-center">
-                      <div className="w-16 h-16 rounded-full bg-rose-500/20 border-4 border-rose-500 text-rose-500 flex items-center justify-center shadow-2xl mb-2">
-                        <span className="text-3xl font-black leading-none pb-0.5">✕</span>
+                      <div className="w-14 h-14 rounded-full bg-rose-500/20 border-4 border-rose-500 text-rose-500 flex items-center justify-center shadow-2xl mb-1.5">
+                        <span className="text-2xl font-black leading-none pb-0.5">✕</span>
                       </div>
 
-                      <h2 className="text-2xl font-black text-rose-300 tracking-tight">
-                        ALREADY ENTERED!
+                      <h2 className="text-xl sm:text-2xl font-black text-rose-300 tracking-tight">
+                        ALREADY CHECKED IN!
                       </h2>
                       <p className="text-xs font-semibold text-rose-100 mt-0.5">
-                        Ticket already checked in! Duplicate entry rejected.
+                        {feedbackMessage || 'Ticket already checked in! Duplicate entry rejected.'}
                       </p>
 
                       {activeScannedTicket && (
-                        <div className="mt-3 px-4 py-2.5 rounded-2xl bg-black/60 border border-rose-500/30 text-xs text-rose-100 w-full text-left space-y-1">
+                        <div className="mt-2.5 px-3.5 py-2 rounded-2xl bg-black/60 border border-rose-500/30 text-xs text-rose-100 w-full text-left space-y-0.5">
                           <p className="truncate"><b>Attendee:</b> {activeScannedTicket.userName}</p>
                           <p className="font-mono text-[11px] text-rose-300"><b>Pass ID:</b> {activeScannedTicket.ticketId}</p>
                           <p className="text-[11px] text-rose-300"><b>First Check-in:</b> {activeScannedTicket.entryTime || 'Earlier today'}</p>
                         </div>
                       )}
 
-                      <p className="text-[11px] font-black uppercase tracking-widest text-amber-300 mt-2">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-300 mt-2">
                         DO NOT ADMIT (DUPLICATE PASS)
                       </p>
 
-                      <div className="mt-2.5 w-40 h-1.5 bg-rose-950 rounded-full overflow-hidden">
-                        <div className="h-full bg-rose-500 rounded-full animate-pulse" style={{ width: '100%' }} />
-                      </div>
-                      <span className="text-[10px] text-rose-300 mt-1 font-medium">
-                        Resuming camera in 3.5s...
-                      </span>
+                      <button
+                        type="button"
+                        onClick={resumeScanningNow}
+                        className="mt-2 px-4 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-black text-xs transition cursor-pointer"
+                      >
+                        Scan Next Pass →
+                      </button>
                     </div>
                   )}
 
