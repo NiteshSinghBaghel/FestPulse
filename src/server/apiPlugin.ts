@@ -982,12 +982,28 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
             delete updates.requestingHostId;
             delete updates.requestingHostEmail;
 
-            db.events[idx] = { ...db.events[idx], ...updates, updatedAt: new Date().toISOString() };
+            if (updates.price !== undefined) {
+              updates.price = Math.max(0, Number(updates.price) || 0);
+            }
+            if (updates.capacity !== undefined) {
+              updates.capacity = Math.max(0, Number(updates.capacity) || 0);
+            }
+            if (updates.availableTickets !== undefined) {
+              updates.availableTickets = Math.max(0, Number(updates.availableTickets) || 0);
+            }
+
+            const mergedEvent = { ...db.events[idx], ...updates, updatedAt: new Date().toISOString() };
+            if (mergedEvent.availableTickets <= 0 && mergedEvent.status === 'published') {
+              mergedEvent.status = 'sold_out';
+            } else if (mergedEvent.availableTickets > 0 && mergedEvent.status === 'sold_out' && updates.status === undefined) {
+              mergedEvent.status = 'published';
+            }
+            db.events[idx] = mergedEvent;
             saveDatabase(db);
             if (PostgresService.getConnected()) {
               await PostgresService.upsertEvent(db.events[idx]).catch((e: any) => console.warn('Postgres event update error:', e));
             }
-            broadcastRealtime('events', { eventId }, { events: db.events.filter((e: any) => e.status !== 'draft') });
+            broadcastRealtime('events', { eventId }, buildBroadcastData(db, { includeEvents: true }));
             return sendJson(res, 200, { success: true, event: db.events[idx] });
           }
           if (req.method === 'DELETE') {

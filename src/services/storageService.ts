@@ -475,9 +475,40 @@ export class StorageService {
               // Handle updated/new events list (server wins, merge over local)
               if (Array.isArray(msg.data.events)) {
                 const local = this.getEvents();
+                const serverEvents = (msg.data.events as CollegeEvent[]).filter(
+                  (e) => e?.eventId && !this.isDeletedEvent(e.eventId)
+                );
+                const serverIds = new Set(serverEvents.map((e) => e.eventId));
                 const map = new Map<string, CollegeEvent>();
-                local.forEach(e => { if (e?.eventId) map.set(e.eventId, e); });
-                (msg.data.events as CollegeEvent[]).forEach(e => { if (e?.eventId) map.set(e.eventId, e); });
+
+                // Keep only local events that are either recent un-flushed mutations or own drafts
+                local.forEach((e) => {
+                  if (!e?.eventId || this.isDeletedEvent(e.eventId)) return;
+                  if (this.isRecentMutation(e.eventId)) {
+                    map.set(e.eventId, e);
+                  } else if (e.status === 'draft' && !serverIds.has(e.eventId)) {
+                    const isOwnDraft = Boolean(
+                      session?.role === 'host' &&
+                        ((session.uid && e.hostId === session.uid) ||
+                          (session.email &&
+                            e.hostEmail &&
+                            e.hostEmail.toLowerCase().trim() === session.email.toLowerCase().trim()))
+                    );
+                    if (isOwnDraft) {
+                      map.set(e.eventId, e);
+                    }
+                  }
+                });
+
+                serverEvents.forEach((srvEvt) => {
+                  const localEvt = map.get(srvEvt.eventId);
+                  if (localEvt && this.isRecentMutation(srvEvt.eventId)) {
+                    map.set(srvEvt.eventId, { ...srvEvt, ...localEvt });
+                  } else {
+                    map.set(srvEvt.eventId, srvEvt);
+                  }
+                });
+
                 this.saveEvents(Array.from(map.values()), false);
                 changed = true;
               }
@@ -771,9 +802,11 @@ export class StorageService {
       updatedAt: new Date().toISOString(),
     };
 
-    // Auto sync sold out
-    if (updated.availableTickets <= 0) {
+    // Auto sync sold out without clobbering cancelled/draft states
+    if (updated.availableTickets <= 0 && updated.status === 'published') {
       updated.status = 'sold_out';
+    } else if (updated.availableTickets > 0 && updated.status === 'sold_out' && updates.status === undefined) {
+      updated.status = 'published';
     }
 
     events[idx] = updated;
@@ -799,6 +832,103 @@ export class StorageService {
     FirebaseDbService.updateEvent(eventId, updates).catch(e => console.warn('Cloud updateEvent error:', e));
 
     return updated;
+  }
+
+  static async updateEventAsync(
+    eventId: string,
+    updates: Partial<CollegeEvent>,
+    requestingHostId?: string,
+    requestingHostEmail?: string
+  ): Promise<CollegeEvent> {
+    const events = this.getEvents();
+    const idx = events.findIndex(e => e.eventId === eventId);
+    if (idx === -1) throw new Error('Event not found');
+
+    const currentEvt = events[idx];
+    if (requestingHostId || requestingHostEmail) {
+      const isOwner = Boolean(
+        !currentEvt.hostId ||
+        currentEvt.hostId === 'demo_host_uid' ||
+        !currentEvt.hostEmail ||
+        currentEvt.hostEmail === 'host@campusfest.org' ||
+        (requestingHostId && currentEvt.hostId === requestingHostId) ||
+        (requestingHostEmail && currentEvt.hostEmail && currentEvt.hostEmail.toLowerCase().trim() === requestingHostEmail.toLowerCase().trim())
+      );
+      if (!isOwner) {
+        throw new Error('Unauthorized: You cannot edit an event created by another organizer.');
+      }
+    }
+
+    const hostUpdates: Partial<CollegeEvent> = {};
+    if ((!currentEvt.hostId || currentEvt.hostId === 'demo_host_uid') && requestingHostId) {
+      hostUpdates.hostId = requestingHostId;
+    }
+    if ((!currentEvt.hostEmail || currentEvt.hostEmail === 'host@campusfest.org') && requestingHostEmail) {
+      hostUpdates.hostEmail = requestingHostEmail;
+    }
+
+    const updated: CollegeEvent = {
+      ...currentEvt,
+      ...updates,
+      ...hostUpdates,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (updated.availableTickets <= 0 && updated.status === 'published') {
+      updated.status = 'sold_out';
+    } else if (updated.availableTickets > 0 && updated.status === 'sold_out' && updates.status === undefined) {
+      updated.status = 'published';
+    }
+
+    events[idx] = updated;
+    this.markMutation(eventId);
+    this.saveEvents(events);
+
+    const res = await fetch(`/api/events/${encodeURIComponent(eventId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...updates, ...hostUpdates, requestingHostId, requestingHostEmail }),
+    });
+
+    if (res.status === 404) {
+      const postRes = await fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated),
+      });
+      if (!postRes.ok) {
+        const errData = await postRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to save event on server.');
+      }
+      const postData = await postRes.json().catch(() => null);
+      if (postData?.event) {
+        const latestEvents = this.getEvents();
+        const i = latestEvents.findIndex(e => e.eventId === eventId);
+        if (i >= 0) {
+          latestEvents[i] = { ...updated, ...postData.event };
+          this.saveEvents(latestEvents);
+          return latestEvents[i];
+        }
+      }
+      return updated;
+    }
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to update event on server.');
+    }
+
+    const data = await res.json().catch(() => null);
+    const serverEvent = data?.event ? { ...updated, ...data.event } : updated;
+    const latestEvents = this.getEvents();
+    const latestIdx = latestEvents.findIndex(e => e.eventId === eventId);
+    if (latestIdx >= 0) {
+      latestEvents[latestIdx] = serverEvent;
+      this.saveEvents(latestEvents);
+    }
+
+    FirebaseDbService.updateEvent(eventId, updates).catch(e => console.warn('Cloud updateEvent error:', e));
+    return serverEvent;
   }
 
   static async syncEventToServerAsync(evt: CollegeEvent): Promise<CollegeEvent> {
@@ -906,6 +1036,44 @@ export class StorageService {
     }).catch(e => console.warn('Cloud API deleteEvent warning:', e));
 
     // 2. Delete on Firestore
+    FirebaseDbService.deleteEvent(eventId).catch(e => console.warn('Cloud deleteEvent error:', e));
+  }
+
+  static async deleteEventAsync(
+    eventId: string,
+    requestingHostId?: string,
+    requestingHostEmail?: string
+  ): Promise<void> {
+    const events = this.getEvents();
+    const evt = events.find(e => e.eventId === eventId);
+    if (evt && (requestingHostId || requestingHostEmail)) {
+      const isOwner = Boolean(
+        !evt.hostId ||
+        evt.hostId === 'demo_host_uid' ||
+        !evt.hostEmail ||
+        evt.hostEmail === 'host@campusfest.org' ||
+        (requestingHostId && evt.hostId === requestingHostId) ||
+        (requestingHostEmail && evt.hostEmail && evt.hostEmail.toLowerCase().trim() === requestingHostEmail.toLowerCase().trim())
+      );
+      if (!isOwner) {
+        throw new Error('Unauthorized: You cannot delete an event created by another organizer.');
+      }
+    }
+
+    this.markDeletedEvent(eventId);
+    const filtered = events.filter(e => e.eventId !== eventId);
+    this.saveEvents(filtered);
+
+    const res = await fetch(`/api/events/${encodeURIComponent(eventId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestingHostId, requestingHostEmail }),
+    });
+    if (!res.ok && res.status !== 404) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Failed to delete event on server.');
+    }
+
     FirebaseDbService.deleteEvent(eventId).catch(e => console.warn('Cloud deleteEvent error:', e));
   }
 

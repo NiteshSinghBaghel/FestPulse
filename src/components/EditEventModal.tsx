@@ -113,7 +113,7 @@ export const EditEventModal: React.FC<EditEventModalProps> = ({
     return Object.keys(errs).length === 0;
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!isCreator) {
       alert('Unauthorized: Only the host who created this event has permission to modify it.');
       return;
@@ -124,7 +124,7 @@ export const EditEventModal: React.FC<EditEventModalProps> = ({
     setIsSaving(true);
     try {
       const remainingCapacity = Math.max(0, capacity - event.ticketsSold);
-      const updated = StorageService.updateEvent(event.eventId, {
+      const updated = await StorageService.updateEventAsync(event.eventId, {
         title: title.trim(),
         description: description.trim(),
         category,
@@ -133,7 +133,7 @@ export const EditEventModal: React.FC<EditEventModalProps> = ({
         endTime: endTime.trim(),
         location: location.trim(),
         venue: venue.trim(),
-        price: Number(price),
+        price: Math.max(0, Number(price) || 0),
         capacity: Number(capacity),
         availableTickets: remainingCapacity,
         status,
@@ -324,7 +324,7 @@ export const EditEventModal: React.FC<EditEventModalProps> = ({
                 disabled={!isCreator}
                 min={0}
                 value={price}
-                onChange={(e) => setPrice(Number(e.target.value))}
+                onChange={(e) => setPrice(e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))}
                 className="w-full px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-slate-900 font-bold focus:outline-none focus:border-indigo-500 disabled:opacity-60"
               />
               <p className="text-[10px] text-slate-500 mt-0.5">Set 0 for Free student entry pass</p>

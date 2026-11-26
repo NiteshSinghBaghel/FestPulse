@@ -208,11 +208,25 @@ export const App: React.FC = () => {
     }
   }, [events, pendingEventId, pendingAttendeeEventId, currentUser, role]);
 
-  // Keep selectedEvent synced with latest capacity/ticketsSold updates in real time
+  // Keep selectedEvent synced with latest edits, price/capacity/ticketsSold updates, or deletion in real time
   useEffect(() => {
     if (!selectedEvent) return;
     const latest = events.find((e) => e.eventId === selectedEvent.eventId);
-    if (latest && (latest.updatedAt !== selectedEvent.updatedAt || latest.availableTickets !== selectedEvent.availableTickets || latest.status !== selectedEvent.status)) {
+    if (!latest) {
+      setSelectedEvent(null);
+      setPendingEventId(null);
+      return;
+    }
+    if (
+      latest.updatedAt !== selectedEvent.updatedAt ||
+      latest.price !== selectedEvent.price ||
+      latest.title !== selectedEvent.title ||
+      latest.capacity !== selectedEvent.capacity ||
+      latest.availableTickets !== selectedEvent.availableTickets ||
+      latest.status !== selectedEvent.status ||
+      latest.description !== selectedEvent.description ||
+      latest.date !== selectedEvent.date
+    ) {
       setSelectedEvent(latest);
     }
   }, [events, selectedEvent]);

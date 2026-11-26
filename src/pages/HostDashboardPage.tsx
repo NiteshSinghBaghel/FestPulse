@@ -203,10 +203,10 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
   // Cancellation Confirmation Modal State
   const [eventToCancel, setEventToCancel] = useState<CollegeEvent | null>(null);
 
-  const confirmCancelEvent = () => {
+  const confirmCancelEvent = async () => {
     if (!eventToCancel) return;
     try {
-      StorageService.updateEvent(eventToCancel.eventId, { status: 'cancelled' }, currentUser?.uid, currentUser?.email);
+      await StorageService.updateEventAsync(eventToCancel.eventId, { status: 'cancelled' }, currentUser?.uid, currentUser?.email);
       onEventsUpdated();
       setEventToCancel(null);
     } catch (err: any) {
@@ -214,10 +214,10 @@ export const HostDashboardPage: React.FC<HostDashboardPageProps> = ({
     }
   };
 
-  const handleDeleteEvent = (eventId: string) => {
+  const handleDeleteEvent = async (eventId: string) => {
     if (confirm('Are you sure you want to delete this event? This action cannot be undone.')) {
       try {
-        StorageService.deleteEvent(eventId, currentUser?.uid, currentUser?.email);
+        await StorageService.deleteEventAsync(eventId, currentUser?.uid, currentUser?.email);
         onEventsUpdated();
       } catch (err: any) {
         alert(err?.message || 'Failed to delete event.');
