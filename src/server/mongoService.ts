@@ -165,6 +165,14 @@ export class MongoDbService {
     };
   }
 
+  static async getEvents(): Promise<any[]> {
+    if (!(await this.ensureConnected())) {
+      throw new Error('MongoDB is not connected; unable to refresh events.');
+    }
+    await this.saveQueue;
+    return this.readCollection('events');
+  }
+
   static async saveSnapshot(snapshot: MongoDatabaseSnapshot): Promise<boolean> {
     const operation = this.saveQueue.then(async () => {
       if (!(await this.ensureConnected())) return false;

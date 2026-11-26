@@ -158,7 +158,7 @@ export class StorageService {
   }
 
   /**
-   * Synchronizes data from Cloud API & Firestore into local cache strictly scoped to the active session.
+   * Synchronizes data from the Cloud API and user-scoped Firestore records into the local cache.
    */
   static async syncFromCloud(explicitSession?: SyncSession | null): Promise<{ eventsCount: number; ticketsCount: number }> {
     if (this.isSyncing) {
@@ -179,21 +179,19 @@ export class StorageService {
       const activeRole = session?.role === 'host' ? 'host' : 'user';
       const hasSession = Boolean(activeUid || activeEmail);
 
-      // 1. Fetch from Firestore if user is authenticated in Firebase Auth
-      let fbEvents: CollegeEvent[] = [];
+      // 1. Fetch user-scoped tickets and payouts from Firestore if authenticated in Firebase Auth
       let fbTickets: Ticket[] = [];
       let fbPayouts: PayoutRecord[] = [];
       if (hasSession && FirebaseDbService.getActiveFirebaseUid() === activeUid) {
         try {
           const firestorePromise = Promise.all([
-            FirebaseDbService.getEvents(activeUid),
             FirebaseDbService.getTickets(activeUid, activeRole),
             activeRole === 'host' ? FirebaseDbService.getPayouts(activeUid) : Promise.resolve([] as PayoutRecord[]),
           ]);
           const timeoutPromise = new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Firestore sync timeout')), 2500)
           );
-          [fbEvents, fbTickets, fbPayouts] = await Promise.race([firestorePromise, timeoutPromise]);
+          [fbTickets, fbPayouts] = await Promise.race([firestorePromise, timeoutPromise]);
         } catch (fbErr) {
           console.warn('[Sync] Firestore sync warning:', fbErr);
         }
@@ -244,48 +242,6 @@ export class StorageService {
           eventMap.set(srvEvt.eventId, srvEvt);
         }
       });
-      fbEvents.forEach(e => {
-        if (e?.eventId) {
-          const prev = eventMap.get(e.eventId);
-          const fbPin = e.gatePin && /^\d{6}$/.test(String(e.gatePin).trim()) ? String(e.gatePin).trim() : '';
-          const prevPin = prev?.gatePin && /^\d{6}$/.test(String(prev.gatePin).trim()) ? String(prev.gatePin).trim() : '';
-          const resolvedPin =
-            prevPin && (!fbPin || fbPin === '100000')
-              ? prevPin
-              : fbPin || prevPin || undefined;
-          eventMap.set(
-            e.eventId,
-            prev
-              ? {
-                  ...prev,
-                  ...e,
-                  ...(resolvedPin ? { gatePin: resolvedPin } : {}),
-                }
-              : e
-          );
-        }
-      });
-
-      // Ensure host events from Firestore or local cache are also registered on the backend API server (so unauthenticated volunteer PIN lookups succeed)
-      if (serverSyncOk && hasSession && activeRole === 'host') {
-        const srvById = new Map(srvEvents.map(se => [se.eventId, se]));
-        Array.from(eventMap.values()).forEach((evt) => {
-          const isOwned = Boolean(
-            (activeUid && evt.hostId === activeUid) ||
-            (activeEmail && evt.hostEmail && evt.hostEmail.toLowerCase().trim() === activeEmail)
-          );
-          if (!isOwned) return;
-          const srvEvt = srvById.get(evt.eventId);
-          if (!srvEvt || (evt.gatePin && srvEvt.gatePin !== evt.gatePin)) {
-            fetch('/api/events', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(evt),
-            }).catch(() => {});
-          }
-        });
-      }
-
       this.saveEvents(Array.from(eventMap.values()), false);
 
       // Strictly scope tickets to the logged-in user/host (zero cross-user leakage)
@@ -750,9 +706,6 @@ export class StorageService {
       body: JSON.stringify(newEvent),
     }).catch(e => console.warn('Cloud API saveEvent warning:', e));
 
-    // 2. Sync to Firestore if initialized
-    FirebaseDbService.saveEvent(newEvent).catch(e => console.warn('Cloud saveEvent error:', e));
-
     return newEvent;
   }
 
@@ -807,23 +760,16 @@ export class StorageService {
     this.markMutation(eventId);
     this.saveEvents(events);
 
-    // 1. Sync to Cloud Server API with auto-upsert fallback
+    // 1. Sync to the Cloud Server API; a missing server event must not be recreated from stale local data.
     fetch(`/api/events/${eventId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...updates, ...hostUpdates, requestingHostId, requestingHostEmail }),
-    }).then(async (res) => {
-      if (res.status === 404) {
-        fetch('/api/events', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updated),
-        }).catch(() => {});
+    }).then((res) => {
+      if (!res.ok) {
+        console.warn(`Cloud API updateEvent failed: ${res.status}`);
       }
     }).catch(e => console.warn('Cloud API updateEvent warning:', e));
-
-    // 2. Sync to Firestore
-    FirebaseDbService.updateEvent(eventId, updates).catch(e => console.warn('Cloud updateEvent error:', e));
 
     return updated;
   }
@@ -885,26 +831,9 @@ export class StorageService {
     });
 
     if (res.status === 404) {
-      const postRes = await fetch('/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      });
-      if (!postRes.ok) {
-        const errData = await postRes.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to save event on server.');
-      }
-      const postData = await postRes.json().catch(() => null);
-      if (postData?.event) {
-        const latestEvents = this.getEvents();
-        const i = latestEvents.findIndex(e => e.eventId === eventId);
-        if (i >= 0) {
-          latestEvents[i] = { ...updated, ...postData.event };
-          this.saveEvents(latestEvents);
-          return latestEvents[i];
-        }
-      }
-      return updated;
+      this.markDeletedEvent(eventId);
+      this.saveEvents(this.getEvents().filter((event) => event.eventId !== eventId));
+      throw new Error('Event no longer exists on the server.');
     }
 
     if (!res.ok) {
@@ -921,26 +850,7 @@ export class StorageService {
       this.saveEvents(latestEvents);
     }
 
-    FirebaseDbService.updateEvent(eventId, updates).catch(e => console.warn('Cloud updateEvent error:', e));
     return serverEvent;
-  }
-
-  static async syncEventToServerAsync(evt: CollegeEvent): Promise<CollegeEvent> {
-    if (!evt?.eventId) return evt;
-    try {
-      const res = await fetch('/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(evt),
-      });
-      if (res.ok) {
-        const data = await res.json().catch(() => null);
-        if (data?.event) {
-          return { ...evt, ...data.event };
-        }
-      }
-    } catch {}
-    return evt;
   }
 
   /**
@@ -959,7 +869,7 @@ export class StorageService {
   }
 
   /**
-   * Generates a fresh unique 6-digit Gate PIN for an event and persists it across API, local cache, and Firestore.
+   * Generates a fresh unique 6-digit Gate PIN for an event and persists it across the API and local cache.
    */
   static async regenerateGatePinAsync(
     eventId: string,
@@ -984,7 +894,6 @@ export class StorageService {
           }
           this.markMutation(eventId);
           this.saveEvents(events);
-          FirebaseDbService.updateEvent(eventId, { gatePin: data.event.gatePin }).catch(() => {});
           return idx >= 0 ? events[idx] : data.event;
         }
       }
@@ -1029,8 +938,6 @@ export class StorageService {
       body: JSON.stringify({ requestingHostId, requestingHostEmail }),
     }).catch(e => console.warn('Cloud API deleteEvent warning:', e));
 
-    // 2. Delete on Firestore
-    FirebaseDbService.deleteEvent(eventId).catch(e => console.warn('Cloud deleteEvent error:', e));
   }
 
   static async deleteEventAsync(
@@ -1068,7 +975,6 @@ export class StorageService {
       throw new Error(errData.error || 'Failed to delete event on server.');
     }
 
-    FirebaseDbService.deleteEvent(eventId).catch(e => console.warn('Cloud deleteEvent error:', e));
   }
 
   // ================= TICKETS =================
@@ -1348,22 +1254,6 @@ export class StorageService {
         if (data?.valid && data?.event) {
           return data.event as CollegeEvent;
         }
-      }
-    } catch {}
-
-    // 2. Fallback: Check local browser cache (e.g., offline or newly created event pending server sync)
-    const localMatch = this.validateVolunteerGatePin(cleanPin);
-    if (localMatch) {
-      void this.syncEventToServerAsync(localMatch);
-      return localMatch;
-    }
-
-    // 3. Fallback: Query Firestore directly if user is signed in
-    try {
-      const fbMatch = await FirebaseDbService.findEventByGatePin(cleanPin);
-      if (fbMatch) {
-        void this.syncEventToServerAsync(fbMatch);
-        return fbMatch;
       }
     } catch {}
 
@@ -1784,11 +1674,6 @@ export class StorageService {
         }),
       }).catch(() => {});
 
-      FirebaseDbService.updateEvent(evt.eventId, {
-        ticketsSold: evt.ticketsSold,
-        availableTickets: evt.availableTickets,
-        status: evt.status
-      }).catch(e => console.warn('Cloud updateEvent sync error:', e));
     }
 
     return { success: true, message: 'Ticket cancelled successfully. Pass has been revoked.', ticket };

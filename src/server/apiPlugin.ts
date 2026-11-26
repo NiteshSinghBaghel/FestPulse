@@ -261,6 +261,11 @@ function reconcileEventTicketsSold(db: DatabaseSchema) {
   }
 }
 
+async function refreshEventsFromMongo(db: DatabaseSchema) {
+  if (!MongoDbService.getUri()) return;
+  db.events = await MongoDbService.getEvents();
+}
+
 function computeServerHostRevenue(db: DatabaseSchema, hostId?: string, hostEmail?: string) {
   reconcileEventTicketsSold(db);
   const cleanId = (hostId || '').trim();
@@ -654,6 +659,7 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
 
         // 2. Scoped synchronization: Return ONLY data permitted for the signed-in user/role
         if ((url === '/api/sync' || url.startsWith('/api/sync?')) && req.method === 'GET') {
+          await refreshEventsFromMongo(db);
           reconcileEventTicketsSold(db);
           // Hydrate from Postgres only if already connected AND not yet done this server lifecycle
           if (PostgresService.getConnected() && !hasHydratedFromPostgres) {
@@ -829,6 +835,10 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
         }
 
         // 3. Events endpoints
+        if (url === '/api/events' || url.startsWith('/api/events?') || url.startsWith('/api/events/')) {
+          await refreshEventsFromMongo(db);
+        }
+
         if (url === '/api/events' || url.startsWith('/api/events?')) {
           if (req.method === 'GET') {
             reconcileEventTicketsSold(db);
@@ -933,24 +943,9 @@ export const apiMiddleware = async (req: any, res: any, next: any) => {
           const eventId = url.replace('/api/events/', '').split('?')[0];
           if (req.method === 'PUT') {
             const updates = await parseBody(req);
-            let idx = db.events.findIndex((e) => e.eventId === eventId);
+            const idx = db.events.findIndex((e) => e.eventId === eventId);
             if (idx === -1) {
-              // Auto-upsert if event doesn't exist on server yet
-              const newEvent = {
-                eventId,
-                ...updates,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-              };
-              delete newEvent.requestingHostId;
-              delete newEvent.requestingHostEmail;
-              db.events.unshift(newEvent);
-              saveDatabase(db);
-              if (PostgresService.getConnected()) {
-                await PostgresService.upsertEvent(newEvent).catch(() => {});
-              }
-              broadcastRealtime('events', { eventId }, { events: db.events.filter((e: any) => e.status !== 'draft') });
-              return sendJson(res, 200, { success: true, event: newEvent });
+              return sendJson(res, 404, { error: 'Event not found.' });
             }
 
             const currentEvent = db.events[idx];

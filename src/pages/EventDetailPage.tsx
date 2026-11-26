@@ -30,7 +30,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
   const { currentUser } = useAuth();
   const [isVolunteerModalOpen, setIsVolunteerModalOpen] = useState(false);
   const [displayGatePin, setDisplayGatePin] = useState(event.gatePin || '');
-  const isHost = (currentUser?.uid && currentUser.uid === event.hostId) || 
+  const isHost = (currentUser?.uid && currentUser.uid === event.hostId) ||
                  (currentUser?.email && currentUser.email === event.hostEmail);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
@@ -38,10 +38,7 @@ export const EventDetailPage: React.FC<EventDetailPageProps> = ({ event, onBack,
 
   useEffect(() => {
     setDisplayGatePin(event.gatePin || '');
-    if (isHost && event.gatePin && /^\d{6}$/.test(String(event.gatePin).trim())) {
-      void StorageService.syncEventToServerAsync(event);
-    }
-  }, [event.eventId, event.gatePin, isHost]);
+  }, [event.eventId, event.gatePin]);
 
   const percentBooked = Math.round((event.ticketsSold / event.capacity) * 100);
   const isSoldOut = event.status === 'sold_out' || event.availableTickets <= 0;
