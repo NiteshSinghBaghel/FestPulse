@@ -696,18 +696,12 @@ export class StorageService {
   }
 
   /**
-   * Strictly filters and returns events owned by the specified organizer ID or email.
+   * Returns all database events for the authenticated host portal so events appear across every login.
    */
   static getHostEvents(organizerId: string, organizerEmail?: string): CollegeEvent[] {
     if (!organizerId && !organizerEmail) return [];
-    const cleanId = organizerId ? organizerId.trim() : '';
-    const cleanEmail = organizerEmail ? organizerEmail.toLowerCase().trim() : '';
 
-    const events = this.getEvents().filter(e => {
-      if (cleanId && e.hostId === cleanId) return true;
-      if (cleanEmail && e.hostEmail && e.hostEmail.toLowerCase().trim() === cleanEmail) return true;
-      return false;
-    });
+    const events = this.getEvents();
 
     const hostEventIds = new Set(events.map(e => e.eventId));
     const allTickets = this.getTickets();
